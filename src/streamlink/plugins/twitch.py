@@ -170,9 +170,10 @@ class TwitchHLSStream(HLSStream):
 class UsherService:
     def __init__(self, session):
         self.session = session
+        self.purple_adblock = self.session.get_plugin_option("twitch", "purple-adblock")
 
     def _create_url(self, endpoint, **extra_params):
-        if self.options.get("purple_adblock"):
+        if self.purple_adblock:
             url = f"https://jupter.ga{endpoint}"
         else:
             url = f"https://usher.ttvnw.net{endpoint}"
@@ -207,7 +208,7 @@ class UsherService:
             log.debug(f"{extra_params_debug!r}")
         except PluginError:
             pass
-        if self.options.get("purple_adblock"):
+        if self.purple_adblock:
             return self._create_url(f"/channel/{channel}", **extra_params)
         return self._create_url(f"/api/channel/hls/{channel}.m3u8", **extra_params)
 
