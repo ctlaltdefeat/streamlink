@@ -223,8 +223,8 @@ def output_stream_http(plugin: Plugin, initial_streams: Streams, formatter: Form
                         stream = streams[stream_name]
                         break
                 else:
-                    log.info("Stream not available, will re-fetch streams in 10 sec")
-                    sleep(10)
+                    log.info("Stream not available, will re-fetch streams in 1 sec")
+                    sleep(1)
                     continue
             except PluginError as err:
                 log.error(f"Unable to fetch new streams: {err}")
