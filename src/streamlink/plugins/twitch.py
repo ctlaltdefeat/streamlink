@@ -172,7 +172,10 @@ class UsherService:
         self.session = session
 
     def _create_url(self, endpoint, **extra_params):
-        url = f"https://usher.ttvnw.net{endpoint}"
+        if self.options.get("purple_adblock"):
+            url = f"https://jupter.ga{endpoint}"
+        else:
+            url = f"https://usher.ttvnw.net{endpoint}"
         params = {
             "player": "twitchweb",
             "p": int(random() * 999999),
@@ -204,6 +207,8 @@ class UsherService:
             log.debug(f"{extra_params_debug!r}")
         except PluginError:
             pass
+        if self.options.get("purple_adblock"):
+            return self._create_url(f"/channel/{channel}", **extra_params)
         return self._create_url(f"/api/channel/hls/{channel}.m3u8", **extra_params)
 
     def video(self, video_id, **extra_params):
@@ -472,6 +477,13 @@ class TwitchAPI:
 """, re.VERBOSE))
 class Twitch(Plugin):
     arguments = PluginArguments(
+        PluginArgument(
+            "purple-adblock",
+            action="store_true",
+            help="""
+            Use Purple Adblock to block ads.
+            """
+        ),
         PluginArgument(
             "disable-hosting",
             action="store_true",
