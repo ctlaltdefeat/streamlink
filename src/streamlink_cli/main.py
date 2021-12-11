@@ -100,16 +100,16 @@ def create_output(formatter: Formatter):
     if (args.output or args.stdout) and (args.record or args.record_and_pipe):
         console.exit("Cannot use record options with other file output options.")
 
-    if args.output:
-        if args.output == "-":
-            out = FileOutput(fd=stdout)
-        else:
-            out = check_file_output(formatter.path(args.output, args.fs_safe_rules), args.force)
-    elif args.stdout:
-        out = FileOutput(fd=stdout)
+    if args.output and args.output == "-" or not args.output and args.stdout:
+        return FileOutput(fd=stdout)
+    elif args.output:
+        return check_file_output(
+            formatter.path(args.output, args.fs_safe_rules), args.force
+        )
+
     elif args.record_and_pipe:
         record = check_file_output(formatter.path(args.record_and_pipe, args.fs_safe_rules), args.force)
-        out = FileOutput(fd=stdout, record=record)
+        return FileOutput(fd=stdout, record=record)
     else:
         http = namedpipe = record = None
 
@@ -131,7 +131,7 @@ def create_output(formatter: Formatter):
 
         log.info(f"Starting player: {args.player}")
 
-        out = PlayerOutput(
+        return PlayerOutput(
             args.player,
             args=args.player_args,
             quiet=not args.verbose_player,
@@ -139,10 +139,10 @@ def create_output(formatter: Formatter):
             namedpipe=namedpipe,
             http=http,
             record=record,
-            title=formatter.title(args.title, defaults=DEFAULT_STREAM_METADATA) if args.title else args.url
+            title=formatter.title(args.title, defaults=DEFAULT_STREAM_METADATA)
+            if args.title
+            else args.url,
         )
-
-    return out
 
 
 def create_http_server(*_args, **_kwargs):
@@ -554,12 +554,8 @@ def handle_url():
         log.info(f"Found matching plugin {plugin.module} for URL {args.url}")
 
         if args.retry_max or args.retry_streams:
-            retry_streams = 1
-            retry_max = 0
-            if args.retry_streams:
-                retry_streams = args.retry_streams
-            if args.retry_max:
-                retry_max = args.retry_max
+            retry_streams = args.retry_streams or 1
+            retry_max = args.retry_max or 0
             streams = fetch_streams_with_retry(plugin, retry_streams, retry_max)
         else:
             streams = fetch_streams(plugin)
@@ -567,7 +563,6 @@ def handle_url():
         console.exit(f"No plugin can handle URL: {args.url}")
     except PluginError as err:
         console.exit(err)
-
     if not streams:
         console.exit(f"No playable streams found on this URL: {args.url}")
 
@@ -885,9 +880,8 @@ def setup_plugin_options(session: Streamlink, plugin: Type[Plugin]):
 
 
 def log_root_warning():
-    if hasattr(os, "getuid"):
-        if os.geteuid() == 0:
-            log.info("streamlink is running as root! Be careful!")
+    if hasattr(os, "getuid") and os.geteuid() == 0:
+        log.info("streamlink is running as root! Be careful!")
 
 
 def log_current_versions():
@@ -956,7 +950,7 @@ def check_version(force=False):
 
     if latest_version > installed_version:
         log.info(f"A new version of Streamlink ({latest_version}) is available!")
-        cache.set("version_info_printed", True, (60 * 60 * 6))
+        cache.set("version_info_printed", True, 60**2 * 6)
     elif force:
         log.info(f"Your Streamlink version ({installed_version}) is up to date!")
 

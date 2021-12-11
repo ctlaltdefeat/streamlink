@@ -19,6 +19,11 @@ from streamlink.utils.parse import parse_json, parse_qsd
 from streamlink.utils.times import hours_minutes_seconds
 from streamlink.utils.url import update_qsd
 
+try:
+    import browser_cookie3 as browser_cookie
+except ImportError:
+    browser_cookie = None
+
 log = logging.getLogger(__name__)
 
 LOW_LATENCY_MAX_LIVE_EDGE = 2
@@ -62,12 +67,10 @@ class TwitchM3U8Parser(M3U8Parser):
         # Use the average duration of all regular segments for the duration of prefetch segments.
         # This is better than using the duration of the last segment when regular segment durations vary a lot.
         # In low latency mode, the playlist reload time is the duration of the last segment.
-        duration = last.duration if last.prefetch else sum(segment.duration for segment in segments) / float(len(segments))
-        segments.append(last._replace(
-            uri=self.uri(value),
-            duration=duration,
-            prefetch=True
-        ))
+        duration = (
+            last.duration if last.prefetch else sum(segment.duration for segment in segments) / float(len(segments))
+        )
+        segments.append(last._replace(uri=self.uri(value), duration=duration, prefetch=True))
 
     def parse_tag_ext_x_daterange(self, value):
         super().parse_tag_ext_x_daterange(value)
@@ -95,7 +98,7 @@ class TwitchM3U8Parser(M3U8Parser):
             date=date,
             map=self.state.get("map"),
             ad=ad,
-            prefetch=False
+            prefetch=False,
         )
 
 
@@ -190,6 +193,7 @@ class UsherService:
         req = requests.Request("GET", url, params=params)
         req = self.session.http.prepare_request(req)
 
+        log.info(f"Params on usher m3u8 request: {params}")
         return req.url
 
     def channel(self, channel, **extra_params):
@@ -197,13 +201,7 @@ class UsherService:
             extra_params_debug = validate.Schema(
                 validate.get("token"),
                 validate.parse_json(),
-                {
-                    "adblock": bool,
-                    "geoblock_reason": str,
-                    "hide_ads": bool,
-                    "server_ads": bool,
-                    "show_ads": bool,
-                }
+                {"adblock": bool, "geoblock_reason": str, "hide_ads": bool, "server_ads": bool, "show_ads": bool},
             ).validate(extra_params)
             log.debug(f"{extra_params_debug!r}")
         except PluginError:
@@ -222,14 +220,16 @@ class TwitchAPI:
         self.headers = {
             "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         }
+        if session.get_plugin_option("twitch", "chrome-oauth") and browser_cookie:
+            oauth_token = next(
+                (co.value for co in browser_cookie.chrome(domain_name=".twitch.tv") if co.name == "auth-token"), None
+            )
+            if oauth_token:
+                self.headers.update({"Authorization": f"OAuth {oauth_token}"})
         self.headers.update(**{k: v for k, v in session.get_plugin_option("twitch", "api-header") or []})
 
     def call(self, data, schema=None):
-        res = self.session.http.post(
-            "https://gql.twitch.tv/gql",
-            data=json.dumps(data),
-            headers=self.headers
-        )
+        res = self.session.http.post("https://gql.twitch.tv/gql", data=json.dumps(data), headers=self.headers)
 
         return self.session.http.json(res, schema=schema)
 
@@ -237,24 +237,25 @@ class TwitchAPI:
     def _gql_persisted_query(operationname, sha256hash, **variables):
         return {
             "operationName": operationname,
-            "extensions": {
-                "persistedQuery": {
-                    "version": 1,
-                    "sha256Hash": sha256hash
-                }
-            },
-            "variables": dict(**variables)
+            "extensions": {"persistedQuery": {"version": 1, "sha256Hash": sha256hash}},
+            "variables": dict(**variables),
         }
 
     @staticmethod
     def parse_token(tokenstr):
-        return parse_json(tokenstr, schema=validate.Schema(
-            {"chansub": {"restricted_bitrates": validate.all(
-                [str],
-                validate.filter(lambda n: not re.match(r"(.+_)?archives|live|chunked", n))
-            )}},
-            validate.get(("chansub", "restricted_bitrates"))
-        ))
+        return parse_json(
+            tokenstr,
+            schema=validate.Schema(
+                {
+                    "chansub": {
+                        "restricted_bitrates": validate.all(
+                            [str], validate.filter(lambda n: not re.match(r"(.+_)?archives|live|chunked", n))
+                        )
+                    }
+                },
+                validate.get(("chansub", "restricted_bitrates")),
+            ),
+        )
 
     # GraphQL API calls
 
@@ -263,28 +264,21 @@ class TwitchAPI:
             "VideoMetadata",
             "cb3b1eb2f2d2b2f65b8389ba446ec521d76c3aa44f5424a1b1d235fe21eb4806",
             channelLogin="",  # parameter can be empty
-            videoID=video_id
+            videoID=video_id,
         )
 
-        return self.call(query, schema=validate.Schema(
-            {"data": {"video": {
-                "id": str,
-                "owner": {
-                    "displayName": str
+        return self.call(
+            query,
+            schema=validate.Schema(
+                {
+                    "data": {
+                        "video": {"id": str, "owner": {"displayName": str}, "title": str, "game": {"displayName": str}}
+                    }
                 },
-                "title": str,
-                "game": {
-                    "displayName": str
-                }
-            }}},
-            validate.get(("data", "video")),
-            validate.union_get(
-                "id",
-                ("owner", "displayName"),
-                ("game", "displayName"),
-                "title"
-            )
-        ))
+                validate.get(("data", "video")),
+                validate.union_get("id", ("owner", "displayName"), ("game", "displayName"), "title"),
+            ),
+        )
 
     def metadata_channel(self, channel):
         queries = [
@@ -292,80 +286,60 @@ class TwitchAPI:
                 "ChannelShell",
                 "c3ea5a669ec074a58df5c11ce3c27093fa38534c94286dc14b68a25d5adcbf55",
                 login=channel,
-                lcpVideosEnabled=False
+                lcpVideosEnabled=False,
             ),
             self._gql_persisted_query(
                 "StreamMetadata",
                 "059c4653b788f5bdb2f5a2d2a24b0ddc3831a15079001a3d927556a96fb0517f",
-                channelLogin=channel
-            )
+                channelLogin=channel,
+            ),
         ]
 
-        return self.call(queries, schema=validate.Schema(
-            [
-                validate.all(
-                    {"data": {"userOrError": {
-                        "displayName": str
-                    }}}
-                ),
-                validate.all(
-                    {"data": {"user": {
-                        "lastBroadcast": {
-                            "title": str
-                        },
-                        "stream": {
-                            "id": str,
-                            "game": {
-                                "name": str
+        return self.call(
+            queries,
+            schema=validate.Schema(
+                [
+                    validate.all({"data": {"userOrError": {"displayName": str}}}),
+                    validate.all(
+                        {
+                            "data": {
+                                "user": {"lastBroadcast": {"title": str}, "stream": {"id": str, "game": {"name": str}}}
                             }
                         }
-                    }}}
-                )
-            ],
-            validate.union_get(
-                (1, "data", "user", "stream", "id"),
-                (0, "data", "userOrError", "displayName"),
-                (1, "data", "user", "stream", "game", "name"),
-                (1, "data", "user", "lastBroadcast", "title")
-            )
-        ))
+                    ),
+                ],
+                validate.union_get(
+                    (1, "data", "user", "stream", "id"),
+                    (0, "data", "userOrError", "displayName"),
+                    (1, "data", "user", "stream", "game", "name"),
+                    (1, "data", "user", "lastBroadcast", "title"),
+                ),
+            ),
+        )
 
     def metadata_clips(self, clipname):
         queries = [
             self._gql_persisted_query(
-                "ClipsView",
-                "4480c1dcc2494a17bb6ef64b94a5213a956afb8a45fe314c66b0d04079a93a8f",
-                slug=clipname
+                "ClipsView", "4480c1dcc2494a17bb6ef64b94a5213a956afb8a45fe314c66b0d04079a93a8f", slug=clipname
             ),
             self._gql_persisted_query(
-                "ClipsTitle",
-                "f6cca7f2fdfbfc2cecea0c88452500dae569191e58a265f97711f8f2a838f5b4",
-                slug=clipname
-            )
+                "ClipsTitle", "f6cca7f2fdfbfc2cecea0c88452500dae569191e58a265f97711f8f2a838f5b4", slug=clipname
+            ),
         ]
 
-        return self.call(queries, schema=validate.Schema(
-            [
-                validate.all(
-                    {"data": {"clip": {
-                        "id": str,
-                        "broadcaster": {"displayName": str},
-                        "game": {"name": str}
-                    }}},
-                    validate.get(("data", "clip"))
-                ),
-                validate.all(
-                    {"data": {"clip": {"title": str}}},
-                    validate.get(("data", "clip"))
-                )
-            ],
-            validate.union_get(
-                (0, "id"),
-                (0, "broadcaster", "displayName"),
-                (0, "game", "name"),
-                (1, "title")
-            )
-        ))
+        return self.call(
+            queries,
+            schema=validate.Schema(
+                [
+                    validate.all(
+                        {"data": {"clip": {"id": str, "broadcaster": {"displayName": str}, "game": {"name": str}}}},
+                        validate.get(("data", "clip")),
+                    ),
+                    validate.all({"data": {"clip": {"title": str}}}, validate.get(("data", "clip"))),
+                ],
+                validate.union_get((0, "id"), (0, "broadcaster", "displayName"), (0, "game", "name"), (1, "title")),
+            ),
+        )
 
     def access_token(self, is_live, channel_or_vod):
         query = self._gql_persisted_query(
@@ -375,95 +349,91 @@ class TwitchAPI:
             login=channel_or_vod if is_live else "",
             isVod=not is_live,
             vodID=channel_or_vod if not is_live else "",
-            playerType="embed"
+            playerType="embed",
         )
-        subschema = validate.any(None, validate.all(
-            {
-                "value": str,
-                "signature": str
-            },
-            validate.union_get("signature", "value")
-        ))
+        subschema = validate.any(
+            None, validate.all({"value": str, "signature": str}, validate.union_get("signature", "value"))
+        )
 
-        return self.call(query, schema=validate.Schema(
-            {"data": validate.any(
-                validate.all(
-                    {"streamPlaybackAccessToken": subschema},
-                    validate.get("streamPlaybackAccessToken")
-                ),
-                validate.all(
-                    {"videoPlaybackAccessToken": subschema},
-                    validate.get("videoPlaybackAccessToken")
-                )
-            )},
-            validate.get("data")
-        ))
+        return self.call(
+            query,
+            schema=validate.Schema(
+                {
+                    "data": validate.any(
+                        validate.all(
+                            {"streamPlaybackAccessToken": subschema}, validate.get("streamPlaybackAccessToken")
+                        ),
+                        validate.all(
+                            {"videoPlaybackAccessToken": subschema}, validate.get("videoPlaybackAccessToken")
+                        ),
+                    )
+                },
+                validate.get("data"),
+            ),
+        )
 
     def clips(self, clipname):
         query = self._gql_persisted_query(
-            "VideoAccessToken_Clip",
-            "36b89d2507fce29e5ca551df756d27c1cfe079e2609642b4390aa4c35796eb11",
-            slug=clipname
+            "VideoAccessToken_Clip", "36b89d2507fce29e5ca551df756d27c1cfe079e2609642b4390aa4c35796eb11", slug=clipname
         )
 
-        return self.call(query, schema=validate.Schema(
-            {"data": {"clip": {
-                "playbackAccessToken": {
-                    "signature": str,
-                    "value": str
+        return self.call(
+            query,
+            schema=validate.Schema(
+                {
+                    "data": {
+                        "clip": {
+                            "playbackAccessToken": {"signature": str, "value": str},
+                            "videoQualities": [
+                                validate.all(
+                                    {
+                                        "frameRate": validate.transform(int),
+                                        "quality": str,
+                                        "sourceURL": validate.url(),
+                                    },
+                                    validate.transform(lambda q: (f"{q['quality']}p{q['frameRate']}", q["sourceURL"])),
+                                )
+                            ],
+                        }
+                    }
                 },
-                "videoQualities": [validate.all(
-                    {
-                        "frameRate": validate.transform(int),
-                        "quality": str,
-                        "sourceURL": validate.url()
-                    },
-                    validate.transform(lambda q: (
-                        f"{q['quality']}p{q['frameRate']}",
-                        q["sourceURL"]
-                    ))
-                )]
-            }}},
-            validate.get(("data", "clip")),
-            validate.union_get(
-                ("playbackAccessToken", "signature"),
-                ("playbackAccessToken", "value"),
-                "videoQualities"
-            )
-        ))
+                validate.get(("data", "clip")),
+                validate.union_get(
+                    ("playbackAccessToken", "signature"), ("playbackAccessToken", "value"), "videoQualities"
+                ),
+            ),
+        )
 
     def stream_metadata(self, channel):
         query = self._gql_persisted_query(
-            "StreamMetadata",
-            "1c719a40e481453e5c48d9bb585d971b8b372f8ebb105b17076722264dfa5b3e",
-            channelLogin=channel
+            "StreamMetadata", "1c719a40e481453e5c48d9bb585d971b8b372f8ebb105b17076722264dfa5b3e", channelLogin=channel
         )
 
-        return self.call(query, schema=validate.Schema(
-            {"data": {"user": {"stream": {"type": str}}}},
-            validate.get(("data", "user", "stream"))
-        ))
+        return self.call(
+            query,
+            schema=validate.Schema(
+                {"data": {"user": {"stream": {"type": str}}}}, validate.get(("data", "user", "stream"))
+            ),
+        )
 
     def hosted_channel(self, channel):
         query = self._gql_persisted_query(
-            "UseHosting",
-            "427f55a3daca510f726c02695a898ef3a0de4355b39af328848876052ea6b337",
-            channelLogin=channel
+            "UseHosting", "427f55a3daca510f726c02695a898ef3a0de4355b39af328848876052ea6b337", channelLogin=channel
         )
 
-        return self.call(query, schema=validate.Schema(
-            {"data": {"user": {
-                "hosting": {
-                    "login": str,
-                    "displayName": str
-                }
-            }}},
-            validate.get(("data", "user", "hosting")),
-            validate.union_get("login", "displayName")
-        ))
+        return self.call(
+            query,
+            schema=validate.Schema(
+                {"data": {"user": {"hosting": {"login": str, "displayName": str}}}},
+                validate.get(("data", "user", "hosting")),
+                validate.union_get("login", "displayName"),
+            ),
+        )
 
 
-@pluginmatcher(re.compile(r"""
+@pluginmatcher(
+    re.compile(
+        r"""
     https?://(?:(?P<subdomain>[\w-]+)\.)?twitch\.tv/
     (?:
         videos/(?P<videos_id>\d+)
@@ -475,22 +445,32 @@ class TwitchAPI:
             /clip/(?P<clip_name>[\w-]+)
         )?
     )
-""", re.VERBOSE))
+""",
+        re.VERBOSE,
+    )
+)
 class Twitch(Plugin):
     arguments = PluginArguments(
+        PluginArgument(
+            "chrome-oauth",
+            action="store_true",
+            help="""
+            Extract OAuth token from Chrome.
+            """,
+        ),
         PluginArgument(
             "purple-adblock",
             action="store_true",
             help="""
             Use Purple Adblock to block ads.
-            """
+            """,
         ),
         PluginArgument(
             "disable-hosting",
             action="store_true",
             help="""
             Do not open the stream if the target channel is hosting another channel.
-            """
+            """,
         ),
         PluginArgument(
             "disable-ads",
@@ -498,14 +478,14 @@ class Twitch(Plugin):
             help="""
             Skip embedded advertisement segments at the beginning or during a stream.
             Will cause these segments to be missing from the stream.
-            """
+            """,
         ),
         PluginArgument(
             "disable-reruns",
             action="store_true",
             help="""
             Do not open the stream if the target channel is currently broadcasting a rerun.
-            """
+            """,
         ),
         PluginArgument(
             "low-latency",
@@ -522,7 +502,7 @@ class Twitch(Plugin):
 
             Note: Low latency streams have to be enabled by the broadcasters on Twitch themselves.
             Regular streams can cause buffering issues with this option enabled due to the reduced --hls-live-edge value.
-            """
+            """,
         ),
         PluginArgument(
             "api-header",
@@ -533,8 +513,8 @@ class Twitch(Plugin):
             A header to add to each Twitch API HTTP request.
 
             Can be repeated to add multiple headers.
-            """
-        )
+            """,
+        ),
     )
 
     def __init__(self, url):
@@ -570,6 +550,7 @@ class Twitch(Plugin):
                     self._checked_metadata = True
                     self._get_metadata()
                 return parent_method()
+
             return inner
 
         parent = super()
@@ -650,10 +631,7 @@ class Twitch(Plugin):
 
         # only get the token once the channel has been resolved
         log.debug(f"Getting live HLS streams for {self.channel}")
-        self.session.http.headers.update({
-            "referer": "https://player.twitch.tv",
-            "origin": "https://player.twitch.tv",
-        })
+        self.session.http.headers.update({"referer": "https://player.twitch.tv", "origin": "https://player.twitch.tv"})
         sig, token, restricted_bitrates = self._access_token(True, self.channel)
         url = self.usher.channel(self.channel, sig=sig, token=token, fast_bread=True)
 
@@ -676,7 +654,9 @@ class Twitch(Plugin):
                 time_offset = 0
 
         try:
-            streams = TwitchHLSStream.parse_variant_playlist(self.session, url, start_offset=time_offset, **extra_params)
+            streams = TwitchHLSStream.parse_variant_playlist(
+                self.session, url, start_offset=time_offset, **extra_params
+            )
         except OSError as err:
             err = str(err)
             if "404 Client Error" in err or "Failed to parse playlist" in err:

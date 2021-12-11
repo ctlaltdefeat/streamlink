@@ -7,6 +7,7 @@ Desktop.ini
 .cache
 .project
 .settings
+settings.json
 .tmproj
 nbproject
 *.sublime-project
