@@ -193,6 +193,7 @@ class UsherService:
         req = requests.Request("GET", url, params=params)
         req = self.session.http.prepare_request(req)
 
+        log.info(f"Stream url: {url}")
         log.info(f"Params on usher m3u8 request: {params}")
         return req.url
 
@@ -624,10 +625,10 @@ class Twitch(Plugin):
         return False
 
     def _get_hls_streams_live(self):
-        if self._switch_to_hosted_channel():
-            return
-        if self._check_for_rerun():
-            return
+        # if self._switch_to_hosted_channel():
+        #     return
+        # if self._check_for_rerun():
+        #     return
 
         # only get the token once the channel has been resolved
         log.debug(f"Getting live HLS streams for {self.channel}")
