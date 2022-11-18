@@ -1,18 +1,27 @@
+"""
+$description Global live-streaming and video hosting social platform owned by Amazon.
+$url twitch.tv
+$type live, vod
+$notes See the :ref:`Authentication <cli/plugins/twitch:Authentication>` docs on how to prevent ads.
+$notes Read more about :ref:`embedded ads <cli/plugins/twitch:Embedded ads>` here.
+$notes :ref:`Low latency streaming <cli/plugins/twitch:Low latency streaming>` is supported.
+"""
+
+import argparse
 import json
 import logging
 import re
-from datetime import datetime
+import sys
+from datetime import datetime, timedelta
 from random import random
 from typing import List, NamedTuple, Optional
 from urllib.parse import urlparse
 
-import requests
-
 from streamlink.exceptions import NoStreamsError, PluginError
-from streamlink.plugin import Plugin, PluginArgument, PluginArguments, pluginmatcher
+from streamlink.plugin import Plugin, pluginargument, pluginmatcher
 from streamlink.plugin.api import validate
 from streamlink.stream.hls import HLSStream, HLSStreamReader, HLSStreamWorker, HLSStreamWriter
-from streamlink.stream.hls_playlist import ByteRange, ExtInf, Key, M3U8, M3U8Parser, Map, load as load_hls_playlist
+from streamlink.stream.hls_playlist import ByteRange, DateRange, ExtInf, Key, M3U8, M3U8Parser, Map, load as load_hls_playlist
 from streamlink.stream.http import HTTPStream
 from streamlink.utils.args import keyvalue
 from streamlink.utils.parse import parse_json, parse_qsd
@@ -49,10 +58,10 @@ class TwitchSequence(NamedTuple):
 
 
 class TwitchM3U8(M3U8):
-    segments: List[TwitchSegment]
+    segments: List[TwitchSegment]  # type: ignore[assignment]
 
-    def __init__(self):
-        super().__init__()
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.dateranges_ads = []
 
 
@@ -67,26 +76,32 @@ class TwitchM3U8Parser(M3U8Parser):
         # Use the average duration of all regular segments for the duration of prefetch segments.
         # This is better than using the duration of the last segment when regular segment durations vary a lot.
         # In low latency mode, the playlist reload time is the duration of the last segment.
-        duration = (
-            last.duration if last.prefetch else sum(segment.duration for segment in segments) / float(len(segments))
+        duration = last.duration if last.prefetch else sum(segment.duration for segment in segments) / float(len(segments))
+        # Use the last duration for extrapolating the start time of the prefetch segment, which is needed for checking
+        # whether it is an ad segment and matches the parsed date ranges or not
+        date = last.date + timedelta(seconds=last.duration)
+        ad = self._is_segment_ad(date)
+        segment = last._replace(
+            uri=self.uri(value),
+            duration=duration,
+            title=None,
+            discontinuity=self.state.pop("discontinuity", False),
+            date=date,
+            ad=ad,
+            prefetch=True,
         )
-        segments.append(last._replace(uri=self.uri(value), duration=duration, prefetch=True))
+        segments.append(segment)
 
     def parse_tag_ext_x_daterange(self, value):
         super().parse_tag_ext_x_daterange(value)
         daterange = self.m3u8.dateranges[-1]
-        is_ad = (
-            daterange.classname == "twitch-stitched-ad"
-            or str(daterange.id or "").startswith("stitched-ad-")
-            or any(attr_key.startswith("X-TV-TWITCH-AD-") for attr_key in daterange.x.keys())
-        )
-        if is_ad:
+        if self._is_daterange_ad(daterange):
             self.m3u8.dateranges_ads.append(daterange)
 
-    def get_segment(self, uri: str) -> TwitchSegment:
+    def get_segment(self, uri: str) -> TwitchSegment:  # type: ignore[override]
         extinf: ExtInf = self.state.pop("extinf", None) or ExtInf(0, None)
         date = self.state.pop("date", None)
-        ad = any(self.m3u8.is_date_in_daterange(date, daterange) for daterange in self.m3u8.dateranges_ads)
+        ad = self._is_segment_ad(date, extinf.title)
 
         return TwitchSegment(
             uri=uri,
@@ -101,8 +116,26 @@ class TwitchM3U8Parser(M3U8Parser):
             prefetch=False,
         )
 
+    def _is_segment_ad(self, date: datetime, title: Optional[str] = None) -> bool:
+        return (
+            title is not None and "Amazon" in title
+            or any(self.m3u8.is_date_in_daterange(date, daterange) for daterange in self.m3u8.dateranges_ads)
+        )
+
+    @staticmethod
+    def _is_daterange_ad(daterange: DateRange) -> bool:
+        return (
+            daterange.classname == "twitch-stitched-ad"
+            or str(daterange.id or "").startswith("stitched-ad-")
+            or any(attr_key.startswith("X-TV-TWITCH-AD-") for attr_key in daterange.x.keys())
+        )
+
 
 class TwitchHLSStreamWorker(HLSStreamWorker):
+    reader: "TwitchHLSStreamReader"
+    writer: "TwitchHLSStreamWriter"
+    stream: "TwitchHLSStream"
+
     def __init__(self, reader, *args, **kwargs):
         self.had_content = False
         super().__init__(reader, *args, **kwargs)
@@ -110,13 +143,13 @@ class TwitchHLSStreamWorker(HLSStreamWorker):
     def _reload_playlist(self, *args):
         return load_hls_playlist(*args, parser=TwitchM3U8Parser, m3u8=TwitchM3U8)
 
-    def _playlist_reload_time(self, playlist: TwitchM3U8, sequences: List[TwitchSequence]):
+    def _playlist_reload_time(self, playlist: TwitchM3U8, sequences: List[TwitchSequence]):  # type: ignore[override]
         if self.stream.low_latency and sequences:
             return sequences[-1].segment.duration
 
-        return super()._playlist_reload_time(playlist, sequences)
+        return super()._playlist_reload_time(playlist, sequences)  # type: ignore[arg-type]
 
-    def process_sequences(self, playlist: TwitchM3U8, sequences: List[TwitchSequence]):
+    def process_sequences(self, playlist: TwitchM3U8, sequences: List[TwitchSequence]):  # type: ignore[override]
         # ignore prefetch segments if not LL streaming
         if not self.stream.low_latency:
             sequences = [seq for seq in sequences if not seq.segment.prefetch]
@@ -138,11 +171,14 @@ class TwitchHLSStreamWorker(HLSStreamWorker):
         if self.stream.disable_ads and self.playlist_sequence == -1 and not self.had_content:
             log.info("Waiting for pre-roll ads to finish, be patient")
 
-        return super().process_sequences(playlist, sequences)
+        return super().process_sequences(playlist, sequences)  # type: ignore[arg-type]
 
 
 class TwitchHLSStreamWriter(HLSStreamWriter):
-    def should_filter_sequence(self, sequence: TwitchSequence):
+    reader: "TwitchHLSStreamReader"
+    stream: "TwitchHLSStream"
+
+    def should_filter_sequence(self, sequence: TwitchSequence):  # type: ignore[override]
         return self.stream.disable_ads and sequence.segment.ad
 
 
@@ -150,7 +186,11 @@ class TwitchHLSStreamReader(HLSStreamReader):
     __worker__ = TwitchHLSStreamWorker
     __writer__ = TwitchHLSStreamWriter
 
-    def __init__(self, stream):
+    worker: "TwitchHLSStreamWorker"
+    writer: "TwitchHLSStreamWriter"
+    stream: "TwitchHLSStream"
+
+    def __init__(self, stream: "TwitchHLSStream"):
         if stream.disable_ads:
             log.info("Will skip ad segments")
         if stream.low_latency:
@@ -190,8 +230,7 @@ class UsherService:
         }
         params.update(extra_params)
 
-        req = requests.Request("GET", url, params=params)
-        req = self.session.http.prepare_request(req)
+        req = self.session.http.prepare_new_request(url=url, params=params)
 
         log.info(f"Stream url: {url}")
         log.info(f"Params on usher m3u8 request: {params}")
@@ -222,12 +261,11 @@ class TwitchAPI:
             "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         }
         if session.get_plugin_option("twitch", "chrome-oauth") and browser_cookie:
-            oauth_token = next(
-                (co.value for co in browser_cookie.chrome(domain_name=".twitch.tv") if co.name == "auth-token"), None
-            )
-            if oauth_token:
+            if oauth_token := next((co.value for co in browser_cookie.chrome(domain_name=".twitch.tv") if co.name == "auth-token"), None):
                 self.headers.update({"Authorization": f"OAuth {oauth_token}"})
-        self.headers.update(**{k: v for k, v in session.get_plugin_option("twitch", "api-header") or []})
+        self.headers.update(**dict(session.get_plugin_option("twitch", "api-header") or []))
+        self.access_token_params = dict(session.get_plugin_option("twitch", "access-token-param") or [])
+        self.access_token_params.setdefault("playerType", "embed")
 
     def call(self, data, schema=None):
         res = self.session.http.post("https://gql.twitch.tv/gql", data=json.dumps(data), headers=self.headers)
@@ -350,28 +388,29 @@ class TwitchAPI:
             login=channel_or_vod if is_live else "",
             isVod=not is_live,
             vodID=channel_or_vod if not is_live else "",
-            playerType="embed",
+            **self.access_token_params,
         )
-        subschema = validate.any(
-            None, validate.all({"value": str, "signature": str}, validate.union_get("signature", "value"))
+        subschema = validate.none_or_all(
+            {
+                "value": str,
+                "signature": str,
+            },
+            validate.union_get("signature", "value"),
         )
 
-        return self.call(
-            query,
-            schema=validate.Schema(
-                {
-                    "data": validate.any(
-                        validate.all(
-                            {"streamPlaybackAccessToken": subschema}, validate.get("streamPlaybackAccessToken")
-                        ),
-                        validate.all(
-                            {"videoPlaybackAccessToken": subschema}, validate.get("videoPlaybackAccessToken")
-                        ),
-                    )
-                },
-                validate.get("data"),
-            ),
-        )
+        return self.call(query, schema=validate.Schema(
+            {"data": validate.any(
+                validate.all(
+                    {"streamPlaybackAccessToken": subschema},
+                    validate.get("streamPlaybackAccessToken")
+                ),
+                validate.all(
+                    {"videoPlaybackAccessToken": subschema},
+                    validate.get("videoPlaybackAccessToken")
+                )
+            )},
+            validate.get("data")
+        ))
 
     def clips(self, clipname):
         query = self._gql_persisted_query(
@@ -417,20 +456,6 @@ class TwitchAPI:
             ),
         )
 
-    def hosted_channel(self, channel):
-        query = self._gql_persisted_query(
-            "UseHosting", "427f55a3daca510f726c02695a898ef3a0de4355b39af328848876052ea6b337", channelLogin=channel
-        )
-
-        return self.call(
-            query,
-            schema=validate.Schema(
-                {"data": {"user": {"hosting": {"login": str, "displayName": str}}}},
-                validate.get(("data", "user", "hosting")),
-                validate.union_get("login", "displayName"),
-            ),
-        )
-
 
 @pluginmatcher(
     re.compile(
@@ -439,89 +464,98 @@ class TwitchAPI:
     (?:
         videos/(?P<videos_id>\d+)
         |
-        (?P<channel>[^/]+)
+        (?P<channel>[^/?]+)
         (?:
-            /video/(?P<video_id>\d+)
+            /v(?:ideo)?/(?P<video_id>\d+)
             |
-            /clip/(?P<clip_name>[\w-]+)
+            /clip/(?P<clip_name>[^/?]+)
         )?
     )
-""",
-        re.VERBOSE,
-    )
+""", re.VERBOSE))
+@pluginargument(
+    "chrome-oauth",
+    action="store_true",
+    help="""
+    Extract OAuth token from Chrome.
+    """,
+)
+@pluginargument(
+    "purple-adblock",
+    action="store_true",
+    help="""
+    Use Purple Adblock to block ads.
+    """,
+)
+@pluginargument(
+    "disable-ads",
+    action="store_true",
+    help="""
+        Skip embedded advertisement segments at the beginning or during a stream.
+        Will cause these segments to be missing from the output.
+    """,
+)
+@pluginargument(
+    "disable-hosting",
+    action="store_true",
+    help=argparse.SUPPRESS,
+)
+@pluginargument(
+    "disable-reruns",
+    action="store_true",
+    help="Do not open the stream if the target channel is currently broadcasting a rerun.",
+)
+@pluginargument(
+    "low-latency",
+    action="store_true",
+    help=f"""
+        Enables low latency streaming by prefetching HLS segments.
+        Sets --hls-segment-stream-data to true and --hls-live-edge to `{LOW_LATENCY_MAX_LIVE_EDGE}`, if it is higher.
+        Reducing --hls-live-edge to `1` will result in the lowest latency possible, but will most likely cause buffering.
+
+        In order to achieve true low latency streaming during playback, the player's caching/buffering settings will
+        need to be adjusted and reduced to a value as low as possible, but still high enough to not cause any buffering.
+        This depends on the stream's bitrate and the quality of the connection to Twitch's servers. Please refer to the
+        player's own documentation for the required configuration. Player parameters can be set via --player-args.
+
+        Note: Low latency streams have to be enabled by the broadcasters on Twitch themselves.
+        Regular streams can cause buffering issues with this option enabled due to the reduced --hls-live-edge value.
+    """,
+)
+@pluginargument(
+    "api-header",
+    metavar="KEY=VALUE",
+    type=keyvalue,
+    action="append",
+    help="""
+        A header to add to each Twitch API HTTP request.
+
+        Can be repeated to add multiple headers.
+
+        Useful for adding authentication data that can prevent ads. See the plugin-specific documentation for more information.
+    """,
+)
+@pluginargument(
+    "access-token-param",
+    metavar="KEY=VALUE",
+    type=keyvalue,
+    action="append",
+    help="""
+        A parameter to add to the API request for acquiring the streaming access token.
+
+        Can be repeated to add multiple parameters.
+    """,
 )
 class Twitch(Plugin):
-    arguments = PluginArguments(
-        PluginArgument(
-            "chrome-oauth",
-            action="store_true",
-            help="""
-            Extract OAuth token from Chrome.
-            """,
-        ),
-        PluginArgument(
-            "purple-adblock",
-            action="store_true",
-            help="""
-            Use Purple Adblock to block ads.
-            """,
-        ),
-        PluginArgument(
-            "disable-hosting",
-            action="store_true",
-            help="""
-            Do not open the stream if the target channel is hosting another channel.
-            """,
-        ),
-        PluginArgument(
-            "disable-ads",
-            action="store_true",
-            help="""
-            Skip embedded advertisement segments at the beginning or during a stream.
-            Will cause these segments to be missing from the stream.
-            """,
-        ),
-        PluginArgument(
-            "disable-reruns",
-            action="store_true",
-            help="""
-            Do not open the stream if the target channel is currently broadcasting a rerun.
-            """,
-        ),
-        PluginArgument(
-            "low-latency",
-            action="store_true",
-            help=f"""
-            Enables low latency streaming by prefetching HLS segments.
-            Sets --hls-segment-stream-data to true and --hls-live-edge to {LOW_LATENCY_MAX_LIVE_EDGE}, if it is higher.
-            Reducing --hls-live-edge to 1 will result in the lowest latency possible, but will most likely cause buffering.
+    @classmethod
+    def stream_weight(cls, stream):
+        if stream == "source":
+            return sys.maxsize, stream
+        return super().stream_weight(stream)
 
-            In order to achieve true low latency streaming during playback, the player's caching/buffering settings will
-            need to be adjusted and reduced to a value as low as possible, but still high enough to not cause any buffering.
-            This depends on the stream's bitrate and the quality of the connection to Twitch's servers. Please refer to the
-            player's own documentation for the required configuration. Player parameters can be set via --player-args.
-
-            Note: Low latency streams have to be enabled by the broadcasters on Twitch themselves.
-            Regular streams can cause buffering issues with this option enabled due to the reduced --hls-live-edge value.
-            """,
-        ),
-        PluginArgument(
-            "api-header",
-            metavar="KEY=VALUE",
-            type=keyvalue,
-            action="append",
-            help="""
-            A header to add to each Twitch API HTTP request.
-
-            Can be repeated to add multiple headers.
-            """,
-        ),
-    )
-
-    def __init__(self, url):
-        super().__init__(url)
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         match = self.match.groupdict()
-        parsed = urlparse(url)
+        parsed = urlparse(self.url)
         self.params = parse_qsd(parsed.query)
         self.subdomain = match.get("subdomain")
         self.video_id = None
@@ -586,30 +620,6 @@ class Twitch(Plugin):
 
         return sig, token, restricted_bitrates
 
-    def _switch_to_hosted_channel(self):
-        disabled = self.options.get("disable_hosting")
-        hosted_chain = [self.channel]
-        while True:
-            try:
-                login, display_name = self.api.hosted_channel(self.channel)
-            except PluginError:
-                return False
-
-            log.info(f"{self.channel} is hosting {login}")
-            if disabled:
-                log.info("hosting was disabled by command line option")
-                return True
-
-            if login in hosted_chain:
-                loop = " -> ".join(hosted_chain + [login])
-                log.error(f"A loop of hosted channels has been detected, cannot find a playable stream. ({loop})")
-                return True
-
-            hosted_chain.append(login)
-            log.info(f"switching to {login}")
-            self.channel = login
-            self.author = display_name
-
     def _check_for_rerun(self):
         if not self.options.get("disable_reruns"):
             return False
@@ -625,8 +635,6 @@ class Twitch(Plugin):
         return False
 
     def _get_hls_streams_live(self):
-        # if self._switch_to_hosted_channel():
-        #     return
         # if self._check_for_rerun():
         #     return
 

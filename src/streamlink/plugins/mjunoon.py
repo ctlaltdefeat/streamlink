@@ -1,3 +1,10 @@
+"""
+$description Pakistani live TV channels and video on-demand service. OTT service from mjunoon.
+$url mjunoon.tv
+$type live, vod
+$region Pakistan
+"""
+
 import binascii
 import logging
 import re
@@ -107,9 +114,10 @@ class Mjunoon(Plugin):
         return unpad(cipher.decrypt(binascii.unhexlify(encrypted_data)), 16, 'pkcs7')
 
     def get_stream(self, slug, js_data):
-        token_data = {}
-        token_data['token'] = self.cache.get('token')
-        token_data['token_type'] = self.cache.get('token_type')
+        token_data = {
+            "token": self.cache.get("token"),
+            "token_type": self.cache.get("token_type"),
+        }
 
         if token_data['token'] and token_data['token_type']:
             log.debug('Using cached token')

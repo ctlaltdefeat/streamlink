@@ -1,11 +1,31 @@
 import unittest
 from datetime import datetime, timedelta
 
-# noinspection PyPackageRequirements
-from isodate import tzinfo
+from isodate import tzinfo  # type: ignore[import]
 
-from streamlink.stream.hls_playlist import DateRange, Media, Resolution, Segment, StreamInfo, load
+from streamlink.stream.hls_playlist import DateRange, M3U8Parser, Media, Resolution, Segment, StreamInfo, load
 from tests.resources import text
+
+
+def test_parse_tag_callback_cache():
+    class M3U8ParserSubclass(M3U8Parser):
+        def parse_tag_foo_bar(self):  # pragma: no cover
+            pass
+
+    parent = M3U8Parser()
+    assert hasattr(parent, "_TAGS")
+    assert "EXT-X-VERSION" in parent._TAGS
+
+    childA = M3U8ParserSubclass()
+    assert hasattr(childA, "_TAGS")
+    assert "FOO-BAR" in childA._TAGS
+
+    childB = M3U8ParserSubclass()
+    assert hasattr(childB, "_TAGS")
+    assert "FOO-BAR" in childB._TAGS
+
+    assert parent._TAGS is not childA._TAGS
+    assert childA._TAGS is childB._TAGS
 
 
 class TestHLSPlaylist(unittest.TestCase):
@@ -82,7 +102,7 @@ class TestHLSPlaylist(unittest.TestCase):
         self.assertEqual(playlist.target_duration, 120)
 
         self.assertEqual(
-            [daterange for daterange in playlist.dateranges],
+            list(playlist.dateranges),
             [
                 DateRange(id="start-invalid",
                           start_date=None,
@@ -117,7 +137,7 @@ class TestHLSPlaylist(unittest.TestCase):
             ]
         )
         self.assertEqual(
-            [segment for segment in playlist.segments],
+            list(playlist.segments),
             [
                 Segment(uri="http://test.se/segment0-15.ts", duration=15.0, title="live", date=start_date,
                         key=None, discontinuity=False, byterange=None, map=None),

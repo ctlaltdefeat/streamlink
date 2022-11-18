@@ -1,21 +1,46 @@
+import concurrent.futures
 import logging
+import re
 import subprocess
 import sys
 import threading
+from functools import lru_cache
+from pathlib import Path
 from shutil import which
+from typing import List, Optional
 
 from streamlink import StreamError
 from streamlink.compat import devnull
 from streamlink.stream.stream import Stream, StreamIO
 from streamlink.utils.named_pipe import NamedPipe, NamedPipeBase
+from streamlink.utils.processoutput import ProcessOutput
+
 
 log = logging.getLogger(__name__)
 
+_lock_resolve_command = threading.Lock()
+
 
 class MuxedStream(Stream):
+    """
+    Muxes multiple streams into one output stream.
+    """
+
     __shortname__ = "muxed-stream"
 
-    def __init__(self, session, *substreams, **options):
+    def __init__(
+        self,
+        session,
+        *substreams: Stream,
+        **options
+    ):
+        """
+        :param streamlink.Streamlink session: Streamlink session instance
+        :param substreams: Video and/or audio streams
+        :param options: Additional keyword arguments passed to :class:`ffmpegmux.FFMPEGMuxer`.
+                        Subtitle streams need to be set via the ``subtitles`` keyword.
+        """
+
         super().__init__(session)
         self.substreams = substreams
         self.subtitles = options.pop("subtitles", {})
@@ -52,10 +77,56 @@ class MuxedStream(Stream):
 
 
 class FFMPEGMuxer(StreamIO):
-    __commands__ = ['ffmpeg', 'ffmpeg.exe', 'avconv', 'avconv.exe']
+    __commands__ = ["ffmpeg"]
+
     DEFAULT_OUTPUT_FORMAT = "matroska"
     DEFAULT_VIDEO_CODEC = "copy"
     DEFAULT_AUDIO_CODEC = "copy"
+
+    FFMPEG_VERSION: Optional[str] = None
+    FFMPEG_VERSION_TIMEOUT = 4.0
+
+    @classmethod
+    def is_usable(cls, session):
+        return cls.command(session) is not None
+
+    @classmethod
+    def command(cls, session):
+        with _lock_resolve_command:
+            return cls._resolve_command(
+                session.options.get("ffmpeg-ffmpeg"),
+                not session.options.get("ffmpeg-no-validation"),
+            )
+
+    @classmethod
+    @lru_cache(maxsize=128)
+    def _resolve_command(cls, command: Optional[str] = None, validate: bool = True) -> Optional[str]:
+        if command:
+            resolved = which(command)
+        else:
+            resolved = None
+            for cmd in cls.__commands__:
+                resolved = which(cmd)
+                if resolved:
+                    break
+
+        if resolved and validate:
+            log.trace(f"Querying FFmpeg version: {[resolved, '-version']}")  # type: ignore[attr-defined]
+            versionoutput = FFmpegVersionOutput([resolved, "-version"], timeout=cls.FFMPEG_VERSION_TIMEOUT)
+            if not versionoutput.run():
+                log.error("Could not validate FFmpeg!")
+                log.error(f"Unexpected FFmpeg version output while running {[resolved, '-version']}")
+                resolved = None
+            else:
+                cls.FFMPEG_VERSION = versionoutput.version
+                for i, line in enumerate(versionoutput.output):
+                    log.debug(f" {line}" if i > 0 else line)
+
+        if not resolved:
+            log.warning("No valid FFmpeg binary was found. See the --ffmpeg-ffmpeg option.")
+            log.warning("Muxing streams is unsupported! Only a subset of the available streams can be returned!")
+
+        return resolved
 
     @staticmethod
     def copy_to_pipe(stream: StreamIO, pipe: NamedPipeBase):
@@ -126,7 +197,7 @@ class FFMPEGMuxer(StreamIO):
         if session.options.get("ffmpeg-verbose"):
             self.errorlog = sys.stderr
         elif session.options.get("ffmpeg-verbose-path"):
-            self.errorlog = open(session.options.get("ffmpeg-verbose-path"), "w")
+            self.errorlog = Path(session.options.get("ffmpeg-verbose-path")).expanduser().open("w")
             self.close_errorlog = True
         else:
             self.errorlog = devnull()
@@ -139,22 +210,8 @@ class FFMPEGMuxer(StreamIO):
 
         return self
 
-    @classmethod
-    def is_usable(cls, session):
-        return cls.command(session) is not None
-
-    @classmethod
-    def command(cls, session):
-        command = []
-        if session.options.get("ffmpeg-ffmpeg"):
-            command.append(session.options.get("ffmpeg-ffmpeg"))
-        for cmd in command or cls.__commands__:
-            if which(cmd):
-                return cmd
-
     def read(self, size=-1):
-        data = self.process.stdout.read(size)
-        return data
+        return self.process.stdout.read(size)
 
     def close(self):
         if self.closed:
@@ -167,10 +224,14 @@ class FFMPEGMuxer(StreamIO):
             self.process.stdout.close()
 
             # close the streams
-            for stream in self.streams:
-                if hasattr(stream, "close") and callable(stream.close):
-                    stream.close()
+            executor = concurrent.futures.ThreadPoolExecutor()
+            futures = [
+                executor.submit(stream.close)
+                for stream in self.streams
+                if hasattr(stream, "close") and callable(stream.close)
+            ]
 
+            concurrent.futures.wait(futures, return_when=concurrent.futures.ALL_COMPLETED)
             log.debug("Closed all the substreams")
 
         if self.close_errorlog:
@@ -178,3 +239,31 @@ class FFMPEGMuxer(StreamIO):
             self.errorlog = None
 
         super().close()
+
+
+class FFmpegVersionOutput(ProcessOutput):
+    # The version output format of the fftools hasn't been changed since n0.7.1 (2011-04-23):
+    # https://github.com/FFmpeg/FFmpeg/blame/n5.1.1/fftools/ffmpeg.c#L110
+    # https://github.com/FFmpeg/FFmpeg/blame/n5.1.1/fftools/opt_common.c#L201
+    # https://github.com/FFmpeg/FFmpeg/blame/c99b93c5d53d8f4a4f1fafc90f3dfc51467ee02e/fftools/cmdutils.c#L1156
+    # https://github.com/FFmpeg/FFmpeg/commit/89b503b55f2b2713f1c3cc8981102c1a7b663281
+    _re_version = re.compile(r"ffmpeg version (?P<version>\S+)")
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.version: Optional[str] = None
+        self.output: List[str] = []
+
+    def onexit(self, code: int) -> bool:
+        return code == 0 and self.version is not None
+
+    def onstdout(self, idx: int, line: str) -> Optional[bool]:
+        # only validate the very first line of the stdout stream
+        if idx == 0:
+            match = self._re_version.match(line)
+            # abort if the very first line of stdout doesn't match the expected format
+            if not match:
+                return False
+            self.version = match["version"]
+
+        self.output.append(line)

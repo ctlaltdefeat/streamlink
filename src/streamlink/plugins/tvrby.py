@@ -1,3 +1,10 @@
+"""
+$description Live TV channels from BTRC, a Belarusian public, state-owned broadcaster.
+$url tvr.by
+$type live
+$region Belarus
+"""
+
 import logging
 import re
 
@@ -26,11 +33,11 @@ class TVRBy(Plugin):
         ),
     )
 
-    def __init__(self, url):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         # ensure the URL ends with a /
-        if not url.endswith("/"):
-            url += "/"
-        super().__init__(url)
+        if not self.url.endswith("/"):
+            self.url += "/"
 
     def _get_streams(self):
         res = self.session.http.get(self.url)

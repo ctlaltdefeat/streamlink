@@ -1,8 +1,8 @@
 import unittest
 from binascii import hexlify
-from collections import OrderedDict
 from functools import partial
 from threading import Event, Thread
+from typing import List
 
 import requests_mock
 
@@ -114,7 +114,7 @@ class EventedHLSStreamWriter(_HLSStreamWriter):
             # don't write again during teardown
             if not self.closed:
                 super().write(*args, **kwargs)
-        except Exception as err:
+        except Exception as err:  # pragma: no cover
             self.write_error = err
             self.reader.close()
         finally:
@@ -133,7 +133,7 @@ class HLSStreamReadThread(Thread):
         self.read_once = Event()
         self.read_done = Event()
         self.read_all = False
-        self.data = []
+        self.data: List[bytes] = []
         self.error = None
 
         self.session = session
@@ -147,7 +147,7 @@ class HLSStreamReadThread(Thread):
             return self.writer_close()
 
         self.writer_close = self.reader.writer.close
-        self.reader.writer.close = _await_read_then_close
+        self.reader.writer.close = _await_read_then_close  # type: ignore[assignment]
 
     def run(self):
         while not self.reader.buffer.closed:
@@ -236,8 +236,9 @@ class TestMixinStreamHLS(unittest.TestCase):
         thread.reader.writer.join(timeout)
         thread.reader.worker.join(timeout)
         thread.join(timeout)
+        self.assertTrue(self.thread.reader.closed, "Stream reader is closed")
 
-    # make one write call on the write thread and wait until it has finished
+    # make write calls on the write-thread and wait until it has finished
     def await_write(self, write_calls=1, timeout=TIMEOUT_AWAIT_WRITE):
         writer = self.thread.reader.writer
         if not writer.is_alive():  # pragma: no cover
@@ -246,7 +247,7 @@ class TestMixinStreamHLS(unittest.TestCase):
         for write_call in range(write_calls):
             writer.write_wait.set()
             done = writer.write_done.wait(timeout)
-            if writer.write_error:
+            if writer.write_error:  # pragma: no cover
                 raise writer.write_error
             if not done:  # pragma: no cover
                 raise RuntimeError(f"Await write timeout: write_call={write_call + 1}")
@@ -263,7 +264,7 @@ class TestMixinStreamHLS(unittest.TestCase):
         done = thread.read_done.wait(timeout)
 
         try:
-            if thread.error:
+            if thread.error:  # pragma: no cover
                 raise thread.error
             if not done:  # pragma: no cover
                 raise RuntimeError(f"Await read timeout: read_all={read_all}")
@@ -279,7 +280,7 @@ class TestMixinStreamHLS(unittest.TestCase):
     def subject(self, playlists, options=None, streamoptions=None, threadoptions=None, start=True, *args, **kwargs):
         # filter out tags and duplicate segments between playlist responses while keeping index order
         segments_all = [item for playlist in playlists for item in playlist.items if isinstance(item, Segment)]
-        segments = OrderedDict([(segment.num, segment) for segment in segments_all])
+        segments = {segment.num: segment for segment in segments_all}
 
         self.mock("GET", self.url(playlists[0]), [{"text": pl.build(self.id())} for pl in playlists])
         for segment in segments.values():

@@ -2,11 +2,24 @@ import unittest
 from threading import Event
 from unittest.mock import Mock, call, patch
 
-from websocket import ABNF, STATUS_NORMAL
+import pytest
+from websocket import ABNF, STATUS_NORMAL  # type: ignore[import]
 
 from streamlink.logger import DEBUG, TRACE
 from streamlink.plugin.api.websocket import WebsocketClient
 from streamlink.session import Streamlink
+
+
+@pytest.mark.parametrize("name,value", [
+    ("OPCODE_CONT", ABNF.OPCODE_CONT),
+    ("OPCODE_TEXT", ABNF.OPCODE_TEXT),
+    ("OPCODE_BINARY", ABNF.OPCODE_BINARY),
+    ("OPCODE_CLOSE", ABNF.OPCODE_CLOSE),
+    ("OPCODE_PING", ABNF.OPCODE_PING),
+    ("OPCODE_PONG", ABNF.OPCODE_PONG),
+])
+def test_opcode_export(name, value):
+    assert getattr(WebsocketClient, name) == value
 
 
 class TestWebsocketClient(unittest.TestCase):
@@ -37,6 +50,12 @@ class TestWebsocketClient(unittest.TestCase):
             "User-Agent: foo"
         ])
 
+        client = WebsocketClient(self.session, "wss://localhost:0", header={"User-Agent": "bar"})
+        self.assertEqual(client.ws.header, [
+            "User-Agent: bar"
+        ])
+
+    @patch("streamlink.plugin.api.websocket.certify_where", Mock(side_effect=lambda: "/path/to/cacert.pem"))
     def test_args_and_proxy(self):
         self.session.set_option("http-proxy", "https://username:password@hostname:1234")
         client = WebsocketClient(
@@ -63,7 +82,10 @@ class TestWebsocketClient(unittest.TestCase):
         self.assertEqual(mock_ws_run_forever.call_args_list, [
             call(
                 sockopt=("sockopt1", "sockopt2"),
-                sslopt={"ssloptkey": "ssloptval"},
+                sslopt={
+                    "ssloptkey": "ssloptval",
+                    "ca_certs": "/path/to/cacert.pem",
+                },
                 host="customhost",
                 origin="customorigin",
                 suppress_origin=True,
@@ -113,15 +135,25 @@ class TestWebsocketClient(unittest.TestCase):
             mock_ws_close.side_effect = lambda *_, **__: client.running.set()
             client.start()
             client.close(reason="foo")
-        self.assertFalse(client.is_alive())
-        self.assertTrue(client.status)
-        self.assertEqual(mock_ws_close.call_args_list, [
-            call(
-                status=STATUS_NORMAL,
-                reason=b"foo",
-                timeout=3
-            )
-        ])
+        assert not client.is_alive()
+        assert client.status
+        assert mock_ws_close.call_args_list == [call(status=STATUS_NORMAL, reason=b"foo", timeout=3)]
+
+    def test_close_self(self):
+        class WebsocketClientSubclass(WebsocketClient):
+            status = None
+
+            def run(self):
+                try:
+                    self.close(reason=b"bar")
+                except RuntimeError as err:  # pragma: no cover
+                    self.status = err
+
+        client = WebsocketClientSubclass(self.session, "wss://localhost:0")
+        client.start()
+        client.join(timeout=4)
+        assert not client.is_alive()
+        assert client.status is None, "Doesn't join current thread"
 
     @patch("streamlink.plugin.api.websocket.WebSocketApp")
     def test_reconnect_disconnected(self, mock_wsapp: Mock):

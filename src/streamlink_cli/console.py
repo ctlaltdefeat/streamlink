@@ -1,9 +1,9 @@
 import sys
 from getpass import getpass
 from json import dumps
-from typing import Any, IO, Union
+from typing import Any, Dict, List, Optional, TextIO, Union
 
-from streamlink.plugin.plugin import UserInputRequester
+from streamlink.user_input import UserInputRequester
 from streamlink_cli.utils import JSONEncoder
 
 
@@ -26,40 +26,43 @@ class ConsoleUserInputRequester(UserInputRequester):
 
 
 class ConsoleOutput:
-    def __init__(self, output: IO, json: bool = False):
+    def __init__(self, output: TextIO, json: bool = False):
         self.json = json
         self.output = output
 
-    def ask(self, prompt: str) -> Union[None, str]:
+    def ask(self, prompt: str) -> Optional[str]:
         if not sys.stdin.isatty():
-            return
+            return None
 
         self.output.write(prompt)
 
+        # noinspection PyBroadException
         try:
             return input().strip()
         except Exception:
-            return
+            return None
 
-    def askpass(self, prompt: str) -> Union[None, str]:
+    def askpass(self, prompt: str) -> Optional[str]:
         if not sys.stdin.isatty():
-            return
+            return None
 
         return getpass(prompt, self.output)
 
     def msg(self, msg: str) -> None:
+        if self.json:
+            return
         self.output.write(f"{msg}\n")
 
     def msg_json(self, *objs: Any, **keywords: Any) -> None:
         if not self.json:
             return
 
+        out: Union[List, Dict]
         if objs and isinstance(objs[0], list):
             out = []
             for obj in objs:
                 if isinstance(obj, list):
-                    for item in obj:
-                        out.append(item)
+                    out.extend(obj)
                 else:
                     if hasattr(obj, "__json__") and callable(obj.__json__):
                         obj = obj.__json__()
@@ -77,7 +80,7 @@ class ConsoleOutput:
             out.update(**keywords)
 
         msg = dumps(out, cls=JSONEncoder, indent=2)
-        self.msg(msg)
+        self.output.write(f"{msg}\n")
 
         if type(out) is dict and out.get("error"):
             sys.exit(1)

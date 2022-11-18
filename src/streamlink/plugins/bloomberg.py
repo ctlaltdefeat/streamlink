@@ -1,3 +1,9 @@
+"""
+$description America-based television network centred towards business and capital market programming.
+$url bloomberg.com
+$type live, vod
+"""
+
 import logging
 import re
 
@@ -11,16 +17,15 @@ log = logging.getLogger(__name__)
 @pluginmatcher(re.compile(r"""
     https?://(?:www\.)?bloomberg\.com/
     (?:
-        news/videos/[^/]+/[^/]+
+        (?P<live>live)(?:/(?P<channel>[^/]+))?
         |
-        live/(?P<channel>.+)/?
+        news/videos/[^/]+/[^/]+
     )
 """, re.VERBOSE))
 class Bloomberg(Plugin):
     LIVE_API_URL = "https://cdn.gotraffic.net/projector/latest/assets/config/config.min.json?v=1"
     VOD_API_URL = "https://www.bloomberg.com/api/embed?id={0}"
-
-    _re_mp4_bitrate = re.compile(r".*_(?P<bitrate>[0-9]+)\.mp4")
+    DEFAULT_CHANNEL = "us"
 
     def _get_live_streams(self, data, channel):
         schema_live_ids = validate.Schema(
@@ -97,34 +102,23 @@ class Bloomberg(Plugin):
         return secureStreams or streams
 
     def _get_streams(self):
-        self.session.http.headers.update({
-            "authority": "www.bloomberg.com",
-            "upgrade-insecure-requests": "1",
-            "dnt": "1",
-            "accept": ";".join([
-                "text/html,application/xhtml+xml,application/xml",
-                "q=0.9,image/webp,image/apng,*/*",
-                "q=0.8,application/signed-exchange",
-                "v=b3"
-            ])
-        })
+        del self.session.http.headers["Accept-Encoding"]
 
         try:
             data = self.session.http.get(self.url, schema=validate.Schema(
                 validate.parse_html(),
                 validate.xml_xpath_string(".//script[contains(text(),'window.__PRELOADED_STATE__')][1]/text()"),
                 str,
-                validate.transform(re.compile(r"^\s*window\.__PRELOADED_STATE__\s*=\s*({.+})\s*;?\s*$", re.DOTALL).search),
+                validate.regex(re.compile(r"^\s*window\.__PRELOADED_STATE__\s*=\s*({.+})\s*;?\s*$", re.DOTALL)),
                 validate.get(1),
-                validate.parse_json()
+                validate.parse_json(),
             ))
         except PluginError:
             log.error("Could not find JSON data. Invalid URL or bot protection...")
             return
 
-        channel = self.match.group("channel")
-        if channel:
-            streams = self._get_live_streams(data, channel)
+        if self.match.group("live"):
+            streams = self._get_live_streams(data, self.match.group("channel") or self.DEFAULT_CHANNEL)
         else:
             streams = self._get_vod_streams(data)
 

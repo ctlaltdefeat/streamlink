@@ -1,6 +1,56 @@
 Deprecations
 ============
 
+streamlink 5.0.0
+----------------
+
+Deprecation of Plugin.__init__(self, url)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+With the removal of the ``Plugin.bind()`` class method which was used for setting up the
+:py:class:`Streamlink <streamlink.session.Streamlink>` session instance and module name in each plugin class,
+the :py:class:`Plugin <streamlink.plugin.Plugin>` constructor's signature was changed and it now requires
+the ``session`` and ``url`` arguments. Implementors of custom plugins should define variable positional arguments and keyword
+arguments when subclassing and adding a custom constructor (``*args, **kwargs``), and the ``url`` should be accessed via
+``self.url`` after calling the constructor of the super class.
+
+Compatibility wrappers were added for old custom plugin implementations, and a deprecation message will be shown until
+the compatibility wrappers will get removed in a future release.
+
+
+Session.resolve_url() return type changes
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Due to the changes of the :py:class:`Plugin <streamlink.plugin.Plugin>` class mentioned above, the return value of
+:py:meth:`Streamlink.resolve_url <streamlink.Streamlink.resolve_url>` and
+:py:meth:`Streamlink.resolve_url_no_redirect <streamlink.Streamlink.resolve_url_no_redirect>` had to be changed
+from ``tuple[type[Plugin], str]`` to ``tuple[str, type[Plugin], str]``, and both methods now return the resolved plugin name
+as the first item, in addition to the plugin class and resolved URL.
+
+
+streamlink 4.2.0
+----------------
+
+Deprecation of url_master in HLSStream
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``url_master`` parameter and attribute of the :py:class:`streamlink.stream.HLSStream`
+and :py:class:`streamlink.stream.MuxedHLSStream` classes have been deprecated in favor of the ``multivariant`` parameter
+and attribute. ``multivariant`` is an :py:class:`M3U8` reference of the parsed HLS multivariant playlist.
+
+
+streamlink 4.0.0
+----------------
+
+Removal of streamlink.plugin.api.utils
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The ``streamlink.plugin.api.utils`` module including the ``itertags`` function and export aliases for ``streamlink.utils.parse``
+has been removed. Import the parse functions directly and find data in XML/HTML by parsing it via ``parse_{xml,html}`` and
+applying XPath queries to the parsed result via the available methods provided by the ``lxml.etree`` API. The
+``streamlink.plugin.api.validate`` module also has the necessary validation schema functions for this.
+
+
 streamlink 3.0.0
 ----------------
 
@@ -10,6 +60,7 @@ Removal of separate https-proxy option
 :ref:`HTTPS proxy CLI option <cli:HTTP options>` and the respective :ref:`Session options <api:Session>`
 have been deprecated in favor of a single :option:`--http-proxy` that sets the proxy for all HTTP and
 HTTPS requests, including WebSocket connections.
+
 
 streamlink 2.4.0
 ----------------

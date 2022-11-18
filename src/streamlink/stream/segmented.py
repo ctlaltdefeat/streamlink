@@ -3,11 +3,11 @@ import queue
 from concurrent import futures
 from concurrent.futures import Future, ThreadPoolExecutor
 from sys import version_info
-from threading import Event, Thread
+from threading import Event, Thread, current_thread
 from typing import Any, Optional
 
 from streamlink.buffers import RingBuffer
-from streamlink.stream.stream import StreamIO
+from streamlink.stream.stream import Stream, StreamIO
 
 log = logging.getLogger(__name__)
 
@@ -36,23 +36,37 @@ class CompatThreadPoolExecutor(ThreadPoolExecutor):
                     t.join()
 
 
-class SegmentedStreamWorker(Thread):
+class AwaitableMixin:
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._wait = Event()
+
+    def wait(self, time: float) -> bool:
+        """
+        Pause the thread for a specified time.
+        Return False if interrupted by another thread and True if the time runs out normally.
+        """
+        return not self._wait.wait(time)
+
+
+class SegmentedStreamWorker(AwaitableMixin, Thread):
     """The general worker thread.
 
     This thread is responsible for queueing up segments in the
     writer thread.
     """
 
-    def __init__(self, reader, **kwargs):
+    reader: "SegmentedStreamReader"
+    writer: "SegmentedStreamWriter"
+    stream: "Stream"
+
+    def __init__(self, reader: "SegmentedStreamReader", **kwargs):
+        super().__init__(daemon=True, name=f"Thread-{self.__class__.__name__}")
         self.closed = False
         self.reader = reader
         self.writer = reader.writer
         self.stream = reader.stream
         self.session = reader.session
-
-        self._wait = Event()
-
-        super().__init__(daemon=True, name=f"Thread-{self.__class__.__name__}")
 
     def close(self):
         """Shuts down the thread."""
@@ -63,14 +77,6 @@ class SegmentedStreamWorker(Thread):
 
         self.closed = True
         self._wait.set()
-
-    def wait(self, time):
-        """Pauses the thread for a specified time.
-
-        Returns False if interrupted by another thread and True if the
-        time runs out normally.
-        """
-        return not self._wait.wait(time)
 
     def iter_segments(self):
         """The iterator that generates segments for the worker thread.
@@ -91,14 +97,18 @@ class SegmentedStreamWorker(Thread):
         self.close()
 
 
-class SegmentedStreamWriter(Thread):
+class SegmentedStreamWriter(AwaitableMixin, Thread):
     """The writer thread.
 
     This thread is responsible for fetching segments, processing them
     and finally writing the data to the buffer.
     """
 
-    def __init__(self, reader, size=20, retries=None, threads=None, timeout=None):
+    reader: "SegmentedStreamReader"
+    stream: "Stream"
+
+    def __init__(self, reader: "SegmentedStreamReader", size=20, retries=None, threads=None, timeout=None):
+        super().__init__(daemon=True, name=f"Thread-{self.__class__.__name__}")
         self.closed = False
         self.reader = reader
         self.stream = reader.stream
@@ -117,9 +127,7 @@ class SegmentedStreamWriter(Thread):
         self.timeout = timeout
         self.threads = threads
         self.executor = CompatThreadPoolExecutor(max_workers=self.threads)
-        self.futures = queue.Queue(size)
-
-        super().__init__(daemon=True, name=f"Thread-{self.__class__.__name__}")
+        self.futures: queue.Queue[Future] = queue.Queue(size)
 
     def close(self):
         """Shuts down the thread, its executor and closes the reader (worker thread and buffer)."""
@@ -131,6 +139,7 @@ class SegmentedStreamWriter(Thread):
         self.closed = True
         self.reader.close()
         self.executor.shutdown(wait=True, cancel_futures=True)
+        self._wait.set()
 
     def put(self, segment):
         """Adds a segment to the download pool and write queue."""
@@ -208,10 +217,14 @@ class SegmentedStreamReader(StreamIO):
     __worker__ = SegmentedStreamWorker
     __writer__ = SegmentedStreamWriter
 
-    def __init__(self, stream, timeout=None):
+    worker: "SegmentedStreamWorker"
+    writer: "SegmentedStreamWriter"
+    stream: "Stream"
+
+    def __init__(self, stream: "Stream", timeout=None):
         super().__init__()
-        self.session = stream.session
         self.stream = stream
+        self.session = stream.session
         self.timeout = timeout or self.session.options.get("stream-timeout")
 
         buffer_size = self.session.get_option("ringbuffer-size")
@@ -227,6 +240,14 @@ class SegmentedStreamReader(StreamIO):
         self.worker.close()
         self.writer.close()
         self.buffer.close()
+
+        current = current_thread()
+        if current is not self.worker:  # pragma: no branch
+            self.worker.join(timeout=self.timeout)
+        if current is not self.writer:  # pragma: no branch
+            self.writer.join(timeout=self.timeout)
+
+        super().close()
 
     def read(self, size):
         return self.buffer.read(

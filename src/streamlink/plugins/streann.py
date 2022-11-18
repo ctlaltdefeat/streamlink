@@ -1,14 +1,22 @@
+"""
+$description Global live streaming and video on-demand hosting platform.
+$url ott.streann.com
+$url centroecuador.ec
+$url columnaestilos.com
+$url evtv.online/noticias-de-venezuela
+$url telecuracao.com
+$type live, vod
+"""
+
 import base64
 import logging
 import random
 import re
 import time
-from html import unescape as html_unescape
 from urllib.parse import urlparse
 
-from streamlink.plugin import Plugin, PluginArgument, PluginArguments, pluginmatcher
+from streamlink.plugin import Plugin, pluginargument, pluginmatcher
 from streamlink.plugin.api import validate
-from streamlink.plugin.api.utils import itertags
 from streamlink.stream.hls import HLSStream
 from streamlink.utils.crypto import decrypt_openssl
 from streamlink.utils.parse import parse_qsd
@@ -16,38 +24,29 @@ from streamlink.utils.parse import parse_qsd
 log = logging.getLogger(__name__)
 
 
+@pluginmatcher(re.compile(
+    r"https?://ott\.streann\.com/s(?:treaming|-secure)/player\.html"
+))
 @pluginmatcher(re.compile(r"""
-    https?://(?:
-        ott\.streann\.com/s(?:treaming|-secure)/player\.html
+    https?://(?:www\.)?(?:
+        centroecuador\.ec
         |
-        (?:www\.)?(?:
-            centroecuador\.ec
-            |
-            columnaestilos\.com
-            |
-            crc\.cr/estaciones/
-            |
-            evtv\.online/noticias-de-venezuela/
-            |
-            telecuracao\.com
-            |
-            willax\.tv/en-vivo
-        )
+        columnaestilos\.com
+        |
+        crc\.cr/estaciones/
+        |
+        evtv\.online/noticias-de-venezuela/
+        |
+        telecuracao\.com
     )
 """, re.VERBOSE))
+@pluginargument(
+    "url",
+    metavar="URL",
+    type=str,
+    help="Source URL where the iframe is located, only required for direct URLs of ott.streann.com",
+)
 class Streann(Plugin):
-    arguments = PluginArguments(
-        PluginArgument(
-            "url",
-            type=str,
-            metavar="URL",
-            help="""
-            Source URL where the iframe is located,
-            only required for direct URLs of `ott.streann.com`
-            """
-        )
-    )
-
     base_url = "https://ott.streann.com"
     get_time_url = base_url + "/web/services/public/get-server-time"
     token_url = base_url + "/loadbalancer/services/web-players/{playerId}/token/{type}/{dataId}/{deviceId}"
@@ -118,24 +117,23 @@ class Streann(Plugin):
         return data["token"]
 
     def _get_streams(self):
-        p = urlparse(self.url)
-        if "ott.streann.com" != p.netloc:
-            self._domain = p.netloc
-            res = self.session.http.get(self.url)
-            for iframe in itertags(res.text, "iframe"):
-                iframe_url = html_unescape(iframe.attributes.get("src"))
-                if "ott.streann.com" in iframe_url:
-                    self.url = iframe_url
-                    break
-            else:
+        if not self.matches[0]:
+            self._domain = urlparse(self.url).netloc
+            iframes = self.session.http.get(self.url, schema=validate.Schema(
+                validate.parse_html(),
+                validate.xml_findall(".//iframe[@src]"),
+                validate.filter(lambda elem: urlparse(elem.attrib.get("src")).netloc == "ott.streann.com")
+            ))
+            if not iframes:
                 log.error("Could not find 'ott.streann.com' iframe")
                 return
+            self.url = iframes[0].attrib.get("src")
 
         if not self._domain and self.get_option("url"):
             self._domain = urlparse(self.get_option("url")).netloc
 
         if self._domain is None:
-            log.error("Missing source URL use --streann-url")
+            log.error("Missing source URL, use --streann-url")
             return
 
         self.session.http.headers.update({"Referer": self.url})

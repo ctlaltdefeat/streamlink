@@ -3,28 +3,14 @@ import datetime
 import logging
 import math
 import re
-import time
 from collections import defaultdict, namedtuple
 from contextlib import contextmanager
 from itertools import count, repeat
+from typing import Optional
 from urllib.parse import urljoin, urlparse, urlsplit, urlunparse, urlunsplit
 
-from isodate import Duration, parse_datetime, parse_duration
+from isodate import Duration, UTC as utc, parse_datetime, parse_duration  # type: ignore[import]
 
-if hasattr(datetime, "timezone"):
-    utc = datetime.timezone.utc
-else:
-    class UTC(datetime.tzinfo):
-        def utcoffset(self, dt):
-            return datetime.timedelta(0)
-
-        def tzname(self, dt):
-            return "UTC"
-
-        def dst(self, dt):
-            return datetime.timedelta(0)
-
-    utc = UTC()
 
 log = logging.getLogger(__name__)
 epoch_start = datetime.datetime(1970, 1, 1, tzinfo=utc)
@@ -58,22 +44,6 @@ def freeze_timeline(mpd):
     mpd.timelines = timelines
 
 
-@contextmanager
-def sleeper(duration):
-    s = time.time()
-    yield
-    time_to_sleep = duration - (time.time() - s)
-    if time_to_sleep > 0:
-        time.sleep(time_to_sleep)
-
-
-def sleep_until(walltime):
-    c = datetime.datetime.now(tz=utc)
-    time_to_wait = (walltime - c).total_seconds()
-    if time_to_wait > 0:
-        time.sleep(time_to_wait)
-
-
 class MPDParsers:
     @staticmethod
     def bool_str(v):
@@ -99,18 +69,17 @@ class MPDParsers:
         res = ""
         for m in re.compile(r"(.*?)\$(\w+)(?:%([\w.]+))?\$").finditer(url_template):
             _, end = m.span()
-            res += "{0}{{{1}{2}}}".format(m.group(1),
-                                          m.group(2),
-                                          (":" + m.group(3)) if m.group(3) else "")
+            res += "{0}{{{1}{2}}}".format(m.group(1), m.group(2), f":{m.group(3)}" if m.group(3) else "")
+
         return (res + url_template[end:]).format
 
     @staticmethod
     def frame_rate(frame_rate):
-        if "/" in frame_rate:
-            a, b = frame_rate.split("/")
-            return float(a) / float(b)
-        else:
+        if "/" not in frame_rate:
             return float(frame_rate)
+
+        a, b = frame_rate.split("/")
+        return float(a) / float(b)
 
     @staticmethod
     def timedelta(timescale=1):
@@ -134,7 +103,7 @@ class MPDParsingError(Exception):
 
 
 class MPDNode:
-    __tag__ = None
+    __tag__: Optional[str] = None
 
     def __init__(self, node, root=None, parent=None, *args, **kwargs):
         self.node = node
@@ -614,8 +583,7 @@ class Representation(MPDNode):
                     yield segment
         elif segmentLists:
             for segmentList in segmentLists:
-                for segment in segmentList.segments:
-                    yield segment
+                yield from segmentList.segments
         else:
             yield Segment(self.base_url, 0, True, True)
 

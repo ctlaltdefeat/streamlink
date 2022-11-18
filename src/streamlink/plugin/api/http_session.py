@@ -1,25 +1,16 @@
+import ssl
 import time
-from typing import Any, Callable, List, Pattern, Tuple
+from typing import Any, Dict, Pattern, Tuple
 
 import requests.adapters
+# noinspection PyPackageRequirements
 import urllib3
-from requests import Session
+from requests import PreparedRequest, Request, Session
 
 from streamlink.exceptions import PluginError
 from streamlink.packages.requests_file import FileAdapter
 from streamlink.plugin.api import useragents
 from streamlink.utils.parse import parse_json, parse_xml
-
-
-urllib3_version = tuple(map(int, urllib3.__version__.split(".")[:3]))
-
-
-try:
-    # We tell urllib3 to disable warnings about unverified HTTPS requests,
-    # because in some plugins we have to do unverified requests intentionally.
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-except AttributeError:
-    pass
 
 
 class _HTTPResponse(urllib3.response.HTTPResponse):
@@ -39,17 +30,17 @@ class _HTTPResponse(urllib3.response.HTTPResponse):
         #
         # Fix this by overriding urllib3.response.HTTPResponse's constructor and always setting enforce_content_length to True,
         # as there is no way to make requests set this parameter on its own.
-        kwargs.update({"enforce_content_length": True})
+        kwargs["enforce_content_length"] = True
         super().__init__(*args, **kwargs)
 
 
 # override all urllib3.response.HTTPResponse references in requests.adapters.HTTPAdapter.send
-urllib3.connectionpool.HTTPConnectionPool.ResponseCls = _HTTPResponse
-requests.adapters.HTTPResponse = _HTTPResponse
+urllib3.connectionpool.HTTPConnectionPool.ResponseCls = _HTTPResponse  # type: ignore[attr-defined]
+requests.adapters.HTTPResponse = _HTTPResponse  # type: ignore[misc]
 
 
-# Never convert percent-encoded characters to uppercase in urllib3>=1.25.4.
-# This is required for sites which compare request URLs byte for byte and return different responses depending on that.
+# Never convert percent-encoded characters to uppercase in urllib3>=1.25.8.
+# This is required for sites which compare request URLs byte by byte and return different responses depending on that.
 # Older versions of urllib3 are not compatible with this override and will always convert to uppercase characters.
 #
 # https://datatracker.ietf.org/doc/html/rfc3986#section-2.1
@@ -59,43 +50,26 @@ requests.adapters.HTTPResponse = _HTTPResponse
 # > octets, they are equivalent.  For consistency, URI producers and
 # > normalizers should use uppercase hexadecimal digits for all percent-
 # > encodings.
-if urllib3_version >= (1, 25, 4):
-    class Urllib3UtilUrlPercentReOverride:
-        _re_percent_encoding: Pattern = urllib3.util.url.PERCENT_RE
+class Urllib3UtilUrlPercentReOverride:
+    _re_percent_encoding: Pattern = urllib3.util.url.PERCENT_RE  # type: ignore[attr-defined]
 
-        @classmethod
-        def _num_percent_encodings(cls, string) -> int:
-            return len(cls._re_percent_encoding.findall(string))
-
-        # urllib3>=1.25.8
-        # https://github.com/urllib3/urllib3/blame/1.25.8/src/urllib3/util/url.py#L219-L227
-        @classmethod
-        def subn(cls, repl: Callable, string: str) -> Tuple[str, int]:
-            return string, cls._num_percent_encodings(string)
-
-        # urllib3>=1.25.4,<1.25.8
-        # https://github.com/urllib3/urllib3/blame/1.25.4/src/urllib3/util/url.py#L218-L228
-        @classmethod
-        def findall(cls, string: str) -> List[Any]:
-            class _List(list):
-                def __len__(self) -> int:
-                    return cls._num_percent_encodings(string)
-
-            return _List()
-
-    urllib3.util.url.PERCENT_RE = Urllib3UtilUrlPercentReOverride
+    # urllib3>=1.25.8
+    # https://github.com/urllib3/urllib3/blame/1.25.8/src/urllib3/util/url.py#L219-L227
+    @classmethod
+    def subn(cls, repl: Any, string: str, count: Any = None) -> Tuple[str, int]:
+        return string, len(cls._re_percent_encoding.findall(string))
 
 
-def _parse_keyvalue_list(val):
-    for keyvalue in val.split(";"):
-        try:
-            key, value = keyvalue.split("=", 1)
-            yield key.strip(), value.strip()
-        except ValueError:
-            continue
+urllib3.util.url.PERCENT_RE = Urllib3UtilUrlPercentReOverride  # type: ignore[attr-defined]
+
+
+# requests.Request.__init__ keywords, except for "hooks"
+_VALID_REQUEST_ARGS = "method", "url", "headers", "files", "data", "params", "auth", "cookies", "json"
 
 
 class HTTPSession(Session):
+    params: Dict
+
     def __init__(self):
         super().__init__()
 
@@ -139,33 +113,21 @@ class HTTPSession(Session):
         """Parses XML from a response."""
         return parse_xml(res.text, *args, **kwargs)
 
-    def parse_cookies(self, cookies, **kwargs):
-        """Parses a semi-colon delimited list of cookies.
-
-        Example: foo=bar;baz=qux
-        """
-        for name, value in _parse_keyvalue_list(cookies):
-            self.cookies.set(name, value, **kwargs)
-
-    def parse_headers(self, headers):
-        """Parses a semi-colon delimited list of headers.
-
-        Example: foo=bar;baz=qux
-        """
-        for name, value in _parse_keyvalue_list(headers):
-            self.headers[name] = value
-
-    def parse_query_params(self, cookies, **kwargs):
-        """Parses a semi-colon delimited list of query parameters.
-
-        Example: foo=bar;baz=qux
-        """
-        for name, value in _parse_keyvalue_list(cookies):
-            self.params[name] = value
-
     def resolve_url(self, url):
         """Resolves any redirects and returns the final URL."""
         return self.get(url, stream=True).url
+
+    @staticmethod
+    def valid_request_args(**req_keywords) -> Dict:
+        return {k: v for k, v in req_keywords.items() if k in _VALID_REQUEST_ARGS}
+
+    def prepare_new_request(self, **req_keywords) -> PreparedRequest:
+        valid_args = self.valid_request_args(**req_keywords)
+        valid_args.setdefault("method", "GET")
+        request = Request(**valid_args)
+
+        # prepare request with the session context, which might add params, headers, cookies, etc.
+        return self.prepare_request(request)
 
     def request(self, method, url, *args, **kwargs):
         acceptable_status = kwargs.pop("acceptable_status", [])
@@ -220,4 +182,12 @@ class HTTPSession(Session):
         return res
 
 
-__all__ = ["HTTPSession"]
+class TLSSecLevel1Adapter(requests.adapters.HTTPAdapter):
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = ssl.create_default_context()
+        ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+        kwargs["ssl_context"] = ctx
+        return super().init_poolmanager(*args, **kwargs)
+
+
+__all__ = ["HTTPSession", "TLSSecLevel1Adapter"]

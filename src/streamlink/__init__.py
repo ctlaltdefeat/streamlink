@@ -8,14 +8,12 @@ An API is also provided that allows direct access to stream data.
 Full documentation is available at https://streamlink.github.io.
 
 """
-from streamlink._version import get_versions
+from streamlink._version import __version__
 
-__version__ = get_versions()['version']
-del get_versions
 __title__ = "streamlink"
 __license__ = "Simplified BSD"
 __author__ = "Streamlink"
-__copyright__ = "Copyright 2021 Streamlink"
+__copyright__ = "Copyright 2022 Streamlink"
 __credits__ = ["https://github.com/streamlink/streamlink/blob/master/AUTHORS"]
 
 from streamlink.api import streams
