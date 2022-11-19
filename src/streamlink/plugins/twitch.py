@@ -85,7 +85,9 @@ class TwitchM3U8Parser(M3U8Parser):
         # Use the average duration of all regular segments for the duration of prefetch segments.
         # This is better than using the duration of the last segment when regular segment durations vary a lot.
         # In low latency mode, the playlist reload time is the duration of the last segment.
-        duration = last.duration if last.prefetch else sum(segment.duration for segment in segments) / float(len(segments))
+        duration = (
+            last.duration if last.prefetch else sum(segment.duration for segment in segments) / float(len(segments))
+        )
         # Use the last duration for extrapolating the start time of the prefetch segment, which is needed for checking
         # whether it is an ad segment and matches the parsed date ranges or not
         date = last.date + timedelta(seconds=last.duration)
@@ -234,7 +236,7 @@ class UsherService:
 
     def _create_url(self, url, **params):
         req = self.session.http.prepare_new_request(url=url, params=params)
-        log.info(req.url)
+        log.info(f"Stream URL: {req.url}")
         return req.url
 
     def channel(self, channel, **extra_params):
@@ -255,12 +257,16 @@ class UsherService:
             is_adfree = token["turbo"] or token["subscriber"]
         except KeyError:
             pass
-        if self.session.get_plugin_option("twitch", "ttvlol-adblock") and not is_adfree:
-            url = f"https://api.ttv.lol/playlist/{channel}.m3u8%3Fallow_source%3Dtrue%26fast_bread%3Dtrue"
-            self.session.http.headers.update({"x-donate-to": "https://ttv.lol/donate"})
-            params = {}
-        if self.session.get_plugin_option("twitch", "purple-adblock") and not is_adfree:
-            url = f"https://jupter.ga/channel/{channel}"
+        if not is_adfree:
+            if (
+                self.session.get_plugin_option("twitch", "ttvlol-adblock")
+                and self.session.http.get("https://api.ttv.lol/ping").ok
+            ):
+                url = f"https://api.ttv.lol/playlist/{channel}.m3u8%3Fallow_source%3Dtrue%26fast_bread%3Dtrue"
+                self.session.http.headers.update({"x-donate-to": "https://ttv.lol/donate"})
+                params = {}
+            if self.session.get_plugin_option("twitch", "purple-adblock"):
+                url = f"https://jupter.ga/channel/{channel}"
         return self._create_url(url, **params)
 
     def video(self, video_id, **extra_params):
@@ -324,7 +330,11 @@ class TwitchAPI:
         return self.call(
             query,
             schema=validate.Schema(
-                {"data": {"video": {"id": str, "owner": {"displayName": str}, "title": str, "game": {"displayName": str}}}},
+                {
+                    "data": {
+                        "video": {"id": str, "owner": {"displayName": str}, "title": str, "game": {"displayName": str}}
+                    }
+                },
                 validate.get(("data", "video")),
                 validate.union_get("id", ("owner", "displayName"), ("game", "displayName"), "title"),
             ),
@@ -351,7 +361,11 @@ class TwitchAPI:
                 [
                     validate.all({"data": {"userOrError": {"displayName": str}}}),
                     validate.all(
-                        {"data": {"user": {"lastBroadcast": {"title": str}, "stream": {"id": str, "game": {"name": str}}}}}
+                        {
+                            "data": {
+                                "user": {"lastBroadcast": {"title": str}, "stream": {"id": str, "game": {"name": str}}}
+                            }
+                        }
                     ),
                 ],
                 validate.union_get(
@@ -410,7 +424,9 @@ class TwitchAPI:
             schema=validate.Schema(
                 {
                     "data": validate.any(
-                        validate.all({"streamPlaybackAccessToken": subschema}, validate.get("streamPlaybackAccessToken")),
+                        validate.all(
+                            {"streamPlaybackAccessToken": subschema}, validate.get("streamPlaybackAccessToken")
+                        ),
                         validate.all({"videoPlaybackAccessToken": subschema}, validate.get("videoPlaybackAccessToken")),
                     )
                 },
@@ -444,7 +460,9 @@ class TwitchAPI:
                     }
                 },
                 validate.get(("data", "clip")),
-                validate.union_get(("playbackAccessToken", "signature"), ("playbackAccessToken", "value"), "videoQualities"),
+                validate.union_get(
+                    ("playbackAccessToken", "signature"), ("playbackAccessToken", "value"), "videoQualities"
+                ),
             ),
         )
 
@@ -455,7 +473,9 @@ class TwitchAPI:
 
         return self.call(
             query,
-            schema=validate.Schema({"data": {"user": {"stream": {"type": str}}}}, validate.get(("data", "user", "stream"))),
+            schema=validate.Schema(
+                {"data": {"user": {"stream": {"type": str}}}}, validate.get(("data", "user", "stream"))
+            ),
         )
 
 
@@ -675,7 +695,9 @@ class Twitch(Plugin):
                 time_offset = 0
 
         try:
-            streams = TwitchHLSStream.parse_variant_playlist(self.session, url, start_offset=time_offset, **extra_params)
+            streams = TwitchHLSStream.parse_variant_playlist(
+                self.session, url, start_offset=time_offset, **extra_params
+            )
         except OSError as err:
             err = str(err)
             if "404 Client Error" in err or "Failed to parse playlist" in err:
