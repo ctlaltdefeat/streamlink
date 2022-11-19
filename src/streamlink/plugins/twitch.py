@@ -21,7 +21,16 @@ from streamlink.exceptions import NoStreamsError, PluginError
 from streamlink.plugin import Plugin, pluginargument, pluginmatcher
 from streamlink.plugin.api import validate
 from streamlink.stream.hls import HLSStream, HLSStreamReader, HLSStreamWorker, HLSStreamWriter
-from streamlink.stream.hls_playlist import ByteRange, DateRange, ExtInf, Key, M3U8, M3U8Parser, Map, load as load_hls_playlist
+from streamlink.stream.hls_playlist import (
+    ByteRange,
+    DateRange,
+    ExtInf,
+    Key,
+    M3U8,
+    M3U8Parser,
+    Map,
+    load as load_hls_playlist,
+)
 from streamlink.stream.http import HTTPStream
 from streamlink.utils.args import keyvalue
 from streamlink.utils.parse import parse_json, parse_qsd
@@ -118,7 +127,8 @@ class TwitchM3U8Parser(M3U8Parser):
 
     def _is_segment_ad(self, date: datetime, title: Optional[str] = None) -> bool:
         return (
-            title is not None and "Amazon" in title
+            title is not None
+            and "Amazon" in title
             or any(self.m3u8.is_date_in_daterange(date, daterange) for daterange in self.m3u8.dateranges_ads)
         )
 
@@ -213,14 +223,7 @@ class TwitchHLSStream(HLSStream):
 class UsherService:
     def __init__(self, session):
         self.session = session
-        self.purple_adblock = self.session.get_plugin_option("twitch", "purple-adblock")
-
-    def _create_url(self, endpoint, **extra_params):
-        if self.purple_adblock:
-            url = f"https://jupter.ga{endpoint}"
-        else:
-            url = f"https://usher.ttvnw.net{endpoint}"
-        params = {
+        self.default_params = {
             "player": "twitchweb",
             "p": int(random() * 999999),
             "type": "any",
@@ -228,12 +231,10 @@ class UsherService:
             "allow_audio_only": "true",
             "allow_spectre": "false",
         }
-        params.update(extra_params)
 
+    def _create_url(self, url, **params):
         req = self.session.http.prepare_new_request(url=url, params=params)
-
-        log.info(f"Stream url: {url}")
-        log.info(f"Params on usher m3u8 request: {params}")
+        log.info(req.url)
         return req.url
 
     def channel(self, channel, **extra_params):
@@ -246,12 +247,24 @@ class UsherService:
             log.debug(f"{extra_params_debug!r}")
         except PluginError:
             pass
-        if self.purple_adblock:
-            return self._create_url(f"/channel/{channel}", **extra_params)
-        return self._create_url(f"/api/channel/hls/{channel}.m3u8", **extra_params)
+        url = f"https://usher.ttvnw.net/api/channel/hls/{channel}.m3u8"
+        params = self.default_params | extra_params
+        token = json.loads(extra_params["token"])
+        is_adfree = True
+        try:
+            is_adfree = token["turbo"] or token["subscriber"]
+        except KeyError:
+            pass
+        if self.session.get_plugin_option("twitch", "ttvlol-adblock") and not is_adfree:
+            url = f"https://api.ttv.lol/playlist/{channel}.m3u8%3Fallow_source%3Dtrue%26fast_bread%3Dtrue"
+            self.session.http.headers.update({"x-donate-to": "https://ttv.lol/donate"})
+            params = {}
+        if self.session.get_plugin_option("twitch", "purple-adblock") and not is_adfree:
+            url = f"https://jupter.ga/channel/{channel}"
+        return self._create_url(url, **params)
 
     def video(self, video_id, **extra_params):
-        return self._create_url(f"/vod/{video_id}", **extra_params)
+        return self._create_url(f"/vod/{video_id}", **(self.default_params | extra_params))
 
 
 class TwitchAPI:
@@ -261,7 +274,9 @@ class TwitchAPI:
             "Client-ID": "kimne78kx3ncx6brgo4mv6wki5h1ko",
         }
         if session.get_plugin_option("twitch", "chrome-oauth") and browser_cookie:
-            if oauth_token := next((co.value for co in browser_cookie.chrome(domain_name=".twitch.tv") if co.name == "auth-token"), None):
+            if oauth_token := next(
+                (co.value for co in browser_cookie.chrome(domain_name=".twitch.tv") if co.name == "auth-token"), None
+            ):
                 self.headers.update({"Authorization": f"OAuth {oauth_token}"})
         self.headers.update(**dict(session.get_plugin_option("twitch", "api-header") or []))
         self.access_token_params = dict(session.get_plugin_option("twitch", "access-token-param") or [])
@@ -309,11 +324,7 @@ class TwitchAPI:
         return self.call(
             query,
             schema=validate.Schema(
-                {
-                    "data": {
-                        "video": {"id": str, "owner": {"displayName": str}, "title": str, "game": {"displayName": str}}
-                    }
-                },
+                {"data": {"video": {"id": str, "owner": {"displayName": str}, "title": str, "game": {"displayName": str}}}},
                 validate.get(("data", "video")),
                 validate.union_get("id", ("owner", "displayName"), ("game", "displayName"), "title"),
             ),
@@ -340,11 +351,7 @@ class TwitchAPI:
                 [
                     validate.all({"data": {"userOrError": {"displayName": str}}}),
                     validate.all(
-                        {
-                            "data": {
-                                "user": {"lastBroadcast": {"title": str}, "stream": {"id": str, "game": {"name": str}}}
-                            }
-                        }
+                        {"data": {"user": {"lastBroadcast": {"title": str}, "stream": {"id": str, "game": {"name": str}}}}}
                     ),
                 ],
                 validate.union_get(
@@ -398,19 +405,18 @@ class TwitchAPI:
             validate.union_get("signature", "value"),
         )
 
-        return self.call(query, schema=validate.Schema(
-            {"data": validate.any(
-                validate.all(
-                    {"streamPlaybackAccessToken": subschema},
-                    validate.get("streamPlaybackAccessToken")
-                ),
-                validate.all(
-                    {"videoPlaybackAccessToken": subschema},
-                    validate.get("videoPlaybackAccessToken")
-                )
-            )},
-            validate.get("data")
-        ))
+        return self.call(
+            query,
+            schema=validate.Schema(
+                {
+                    "data": validate.any(
+                        validate.all({"streamPlaybackAccessToken": subschema}, validate.get("streamPlaybackAccessToken")),
+                        validate.all({"videoPlaybackAccessToken": subschema}, validate.get("videoPlaybackAccessToken")),
+                    )
+                },
+                validate.get("data"),
+            ),
+        )
 
     def clips(self, clipname):
         query = self._gql_persisted_query(
@@ -438,9 +444,7 @@ class TwitchAPI:
                     }
                 },
                 validate.get(("data", "clip")),
-                validate.union_get(
-                    ("playbackAccessToken", "signature"), ("playbackAccessToken", "value"), "videoQualities"
-                ),
+                validate.union_get(("playbackAccessToken", "signature"), ("playbackAccessToken", "value"), "videoQualities"),
             ),
         )
 
@@ -451,9 +455,7 @@ class TwitchAPI:
 
         return self.call(
             query,
-            schema=validate.Schema(
-                {"data": {"user": {"stream": {"type": str}}}}, validate.get(("data", "user", "stream"))
-            ),
+            schema=validate.Schema({"data": {"user": {"stream": {"type": str}}}}, validate.get(("data", "user", "stream"))),
         )
 
 
@@ -471,7 +473,10 @@ class TwitchAPI:
             /clip/(?P<clip_name>[^/?]+)
         )?
     )
-""", re.VERBOSE))
+""",
+        re.VERBOSE,
+    )
+)
 @pluginargument(
     "chrome-oauth",
     action="store_true",
@@ -484,6 +489,13 @@ class TwitchAPI:
     action="store_true",
     help="""
     Use Purple Adblock to block ads.
+    """,
+)
+@pluginargument(
+    "ttvlol-adblock",
+    action="store_true",
+    help="""
+    Use TTV LOL Adblock to block ads.
     """,
 )
 @pluginargument(
@@ -663,9 +675,7 @@ class Twitch(Plugin):
                 time_offset = 0
 
         try:
-            streams = TwitchHLSStream.parse_variant_playlist(
-                self.session, url, start_offset=time_offset, **extra_params
-            )
+            streams = TwitchHLSStream.parse_variant_playlist(self.session, url, start_offset=time_offset, **extra_params)
         except OSError as err:
             err = str(err)
             if "404 Client Error" in err or "Failed to parse playlist" in err:
