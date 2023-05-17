@@ -534,8 +534,12 @@ def handle_url():
         log.info(f"Found matching plugin {pluginname} for URL {args.url}")
 
         if args.retry_max or args.retry_streams:
-            retry_streams = args.retry_streams or 1
-            retry_max = args.retry_max or 0
+            retry_streams = 1
+            retry_max = 0
+            if args.retry_streams:
+                retry_streams = args.retry_streams
+            if args.retry_max:
+                retry_max = args.retry_max
             streams = fetch_streams_with_retry(plugin, retry_streams, retry_max)
         else:
             streams = fetch_streams(plugin)

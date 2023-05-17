@@ -75,9 +75,7 @@ class TwitchM3U8Parser(M3U8Parser):
         # Use the average duration of all regular segments for the duration of prefetch segments.
         # This is better than using the duration of the last segment when regular segment durations vary a lot.
         # In low latency mode, the playlist reload time is the duration of the last segment.
-        duration = (
-            last.duration if last.prefetch else sum(segment.duration for segment in segments) / float(len(segments))
-        )
+        duration = last.duration if last.prefetch else sum(segment.duration for segment in segments) / float(len(segments))
         # Use the last duration for extrapolating the start time of the prefetch segment, which is needed for checking
         # whether it is an ad segment and matches the parsed date ranges or not
         date = last.date + timedelta(seconds=last.duration)
@@ -122,8 +120,7 @@ class TwitchM3U8Parser(M3U8Parser):
 
     def _is_segment_ad(self, date: datetime, title: Optional[str] = None) -> bool:
         return (
-            title is not None
-            and "Amazon" in title
+            title is not None and "Amazon" in title
             or any(self.m3u8.is_date_in_daterange(date, daterange) for daterange in self.m3u8.dateranges_ads)
         )
 
@@ -523,9 +520,7 @@ class TwitchAPI:
         ))
 
 
-@pluginmatcher(
-    re.compile(
-        r"""
+@pluginmatcher(re.compile(r"""
     https?://(?:(?P<subdomain>[\w-]+)\.)?twitch\.tv/
     (?:
         videos/(?P<videos_id>\d+)
@@ -661,7 +656,6 @@ class Twitch(Plugin):
                     self._checked_metadata = True
                     self._get_metadata()
                 return parent_method()
-
             return inner
 
         parent = super()
@@ -721,7 +715,10 @@ class Twitch(Plugin):
 
         # only get the token once the channel has been resolved
         log.debug(f"Getting live HLS streams for {self.channel}")
-        self.session.http.headers.update({"referer": "https://player.twitch.tv", "origin": "https://player.twitch.tv"})
+        self.session.http.headers.update({
+            "referer": "https://player.twitch.tv",
+            "origin": "https://player.twitch.tv",
+        })
         sig, token, restricted_bitrates = self._access_token(True, self.channel)
         url = self.usher.channel(self.channel, sig=sig, token=token, fast_bread=True)
 
@@ -744,9 +741,7 @@ class Twitch(Plugin):
                 time_offset = 0
 
         try:
-            streams = TwitchHLSStream.parse_variant_playlist(
-                self.session, url, start_offset=time_offset, **extra_params
-            )
+            streams = TwitchHLSStream.parse_variant_playlist(self.session, url, start_offset=time_offset, **extra_params)
         except OSError as err:
             err = str(err)
             if "404 Client Error" in err or "Failed to parse playlist" in err:
