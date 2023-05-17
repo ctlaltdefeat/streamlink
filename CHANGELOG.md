@@ -1,6 +1,154 @@
 # Changelog
 
+## streamlink 5.5.1 (2023-05-08)
+
+Patch release:
+
+- Fixed: shifting time offset when reloading HLS playlists ([#5321](https://github.com/streamlink/streamlink/pull/5321))
+- Fixed: import of `create_urllib3_context` on `urllib3 <2.0.0` ([#5333](https://github.com/streamlink/streamlink/pull/5333))
+- Fixed: Vimeo plugin ([#5331](https://github.com/streamlink/streamlink/pull/5331))
+
+[Full changelog](https://github.com/streamlink/streamlink/compare/5.5.0...5.5.1)
+
+
+## streamlink 5.5.0 (2023-05-05)
+
+Release highlights:
+
+- Added: `--no-config` ([#5314](https://github.com/streamlink/streamlink/pull/5314))
+- Added: `--player-external-http-interface` ([#5295](https://github.com/streamlink/streamlink/pull/5295))
+- Fixed: M3U8 attribute parsing issue ([#5307](https://github.com/streamlink/streamlink/pull/5307))
+- Fixed: various minor plugin issues ([#5291](https://github.com/streamlink/streamlink/pull/5291), [#5299](https://github.com/streamlink/streamlink/pull/5299), [#5306](https://github.com/streamlink/streamlink/pull/5306))
+- Build: bumped urllib3 to `>=1.26.0,<3` and fixed compatibility issues with `urllib3 >=2.0.0` ([#5326](https://github.com/streamlink/streamlink/pull/5326), [#5325](https://github.com/streamlink/streamlink/pull/5325))
+- Docs: bumped furo theme to `2023.03.27` ([#5301](https://github.com/streamlink/streamlink/pull/5301))
+- Docs: bumped build dependencies `sphinx >=5.0.0,<7`, `myst-parser >=1.0.0,<2` and `sphinx-design >=0.4.1,<1` ([#5301](https://github.com/streamlink/streamlink/pull/5301))
+
+[Full changelog](https://github.com/streamlink/streamlink/compare/5.4.0...5.5.0)
+
+
+## streamlink 5.4.0 (2023-04-12)
+
+Release highlights:
+
+- Added: `--progress` CLI argument and [deprecated `--force-progress`](https://streamlink.github.io/deprecations.html#deprecation-of-force-progress) ([#5268](https://github.com/streamlink/streamlink/pull/5268))
+- Added: `--dash-manifest-reload-attempts` and respective session option ([#5208](https://github.com/streamlink/streamlink/pull/5208))
+- Improved: DASH segment availability/download logging ([#5214](https://github.com/streamlink/streamlink/pull/5214), [#5235](https://github.com/streamlink/streamlink/pull/5235))
+- Refactored: DASH parser + stream implementation ([#5221](https://github.com/streamlink/streamlink/pull/5221), [#5224](https://github.com/streamlink/streamlink/pull/5224), [#5225](https://github.com/streamlink/streamlink/pull/5225), [#5244](https://github.com/streamlink/streamlink/pull/5244), [#5248](https://github.com/streamlink/streamlink/pull/5248))
+- Fixed: DASH segment template numbers and availability times ([#5213](https://github.com/streamlink/streamlink/pull/5213), [#5217](https://github.com/streamlink/streamlink/pull/5217), [#5233](https://github.com/streamlink/streamlink/pull/5233))
+- Fixed: DASH manifest mediaPresentationDuration and period duration ([#5226](https://github.com/streamlink/streamlink/pull/5226))
+- Fixed: DASH manifest suggestedPresentationDelay ([#5215](https://github.com/streamlink/streamlink/pull/5215))
+- Fixed: various DASH manifest parsing bugs ([#5247](https://github.com/streamlink/streamlink/pull/5247))
+- Fixed: DASH timeline IDs not being unique ([#5199](https://github.com/streamlink/streamlink/pull/5199))
+- Fixed: DASH substreams not having synced timelines ([#5262](https://github.com/streamlink/streamlink/pull/5262))
+- Fixed: queued DASH segments being downloaded after closing the stream ([#5236](https://github.com/streamlink/streamlink/pull/5236), [#5237](https://github.com/streamlink/streamlink/pull/5237))
+- Fixed: incorrect min/max values of certain numeric CLI arguments ([#5239](https://github.com/streamlink/streamlink/pull/5239))
+- Fixed: all naive datetime objects and made them timezone-aware ([#5210](https://github.com/streamlink/streamlink/pull/5210))
+- Fixed: TV5monde plugin with new implementation ([#5206](https://github.com/streamlink/streamlink/pull/5206))
+- Fixed: Steam plugin missing CDN auth data in stream URLs ([#5222](https://github.com/streamlink/streamlink/pull/5222))
+- Fixed: Vimeo plugin's playerConfig regex ([#5227](https://github.com/streamlink/streamlink/pull/5227))
+- Fixed: VKplay plugin's validation schema ([#5251](https://github.com/streamlink/streamlink/pull/5251))
+- Fixed: Twitcasting plugin with new implementation ([#5255](https://github.com/streamlink/streamlink/pull/5255))
+- Tests: fixed setuptools/pkg\_resources DeprecationWarnings ([#5167](https://github.com/streamlink/streamlink/pull/5167), [#5230](https://github.com/streamlink/streamlink/pull/5230))
+- Tests: fixed ResourceWarnings due to stale file handles ([#5242](https://github.com/streamlink/streamlink/pull/5242))
+- Added plugins: indihometv ([#5266](https://github.com/streamlink/streamlink/pull/5266)), telemadrid ([#5212](https://github.com/streamlink/streamlink/pull/5212))
+- Removed plugins: nbcnews ([#5279](https://github.com/streamlink/streamlink/pull/5279)), useetv ([#5266](https://github.com/streamlink/streamlink/pull/5266))
+
+[Full changelog](https://github.com/streamlink/streamlink/compare/5.3.1...5.4.0)
+
+
+## streamlink 5.3.1 (2023-02-25)
+
+Patch release:
+
+- Fixed: `http-trust-env` session option name (`--http-ignore-env` CLI parameter) ([#5193](https://github.com/streamlink/streamlink/pull/5193))
+- Fixed: missing byterange attribute of initialization segments in DASH streams ([#5189](https://github.com/streamlink/streamlink/pull/5189))
+- Fixed: broken BaseURL context in DASH streams ([#5194](https://github.com/streamlink/streamlink/pull/5194))
+- Fixed: detection of certain encrypted DASH streams ([#5196](https://github.com/streamlink/streamlink/pull/5196))
+
+[Full changelog](https://github.com/streamlink/streamlink/compare/5.3.0...5.3.1)
+
+
+## streamlink 5.3.0 (2023-02-18)
+
+Release highlights:
+
+- Project meta: dropped Open Collective sponsoring platform and updated the project's README, as well as the docs' donation/support page ([#5143](https://github.com/streamlink/streamlink/pull/5143))
+- Deprecated: global plugin arguments ([#5140](https://github.com/streamlink/streamlink/pull/5140))
+- Fixed: muxed streams sometimes missing data at the end ([#5162](https://github.com/streamlink/streamlink/pull/5162))
+- Fixed: named pipes sometimes not being cleaned up properly ([#5162](https://github.com/streamlink/streamlink/pull/5162))
+- Fixed: new YouTube channel URLs not being matched ([#5137](https://github.com/streamlink/streamlink/pull/5137))
+- Fixed: KeyError when accessing certain YouTube URLs ([#5139](https://github.com/streamlink/streamlink/pull/5139))
+- Fixed: M3U8 attribute parsing ([#5125](https://github.com/streamlink/streamlink/pull/5125))
+- Fixed: NimoTV streams stopping after a few seconds ([#5147](https://github.com/streamlink/streamlink/pull/5147))
+- Fixed: delimiter of `http-query-params` session option string setter ([#5176](https://github.com/streamlink/streamlink/pull/5176))
+- Fixed: sdist/bdist missing some files ([#5119](https://github.com/streamlink/streamlink/pull/5119), [#5141](https://github.com/streamlink/streamlink/pull/5141))
+- Docs: fixed `Streamlink.set_option()` docstring ([#5176](https://github.com/streamlink/streamlink/pull/5176))
+- Docs: improved CLI tutorial ([#5157](https://github.com/streamlink/streamlink/pull/5157))
+- Docs: improved install page ([#5178](https://github.com/streamlink/streamlink/pull/5178))
+- Removed plugins: funimationnow ([#5128](https://github.com/streamlink/streamlink/pull/5128)), schoolism ([#5127](https://github.com/streamlink/streamlink/pull/5127))
+
+[Full changelog](https://github.com/streamlink/streamlink/compare/5.2.1...5.3.0)
+
+
+## streamlink 5.2.1 (2023-01-23)
+
+No code changes.  
+Please see the changelog of the [`5.2.0`](https://streamlink.github.io/changelog.html#streamlink-5-2-0-2023-01-23) release.
+
+- Reverted: PyPI deploy script changes ([#5116](https://github.com/streamlink/streamlink/pull/5116))
+
+[Full changelog](https://github.com/streamlink/streamlink/compare/5.2.0...5.2.1)
+
+
+## streamlink 5.2.0 (2023-01-23)
+
+Release highlights:
+
+- Added: new stream read/output loop, to be able to detect player process termination while stream output is paused (ad filtering, etc.) ([#5024](https://github.com/streamlink/streamlink/pull/5024))
+- Added: support for named plugin matchers ([#5103](https://github.com/streamlink/streamlink/pull/5103), [#5107](https://github.com/streamlink/streamlink/pull/5107))
+- Added: Python warnings capturing to streamlink logger and added `StreamlinkWarning` ([#5072](https://github.com/streamlink/streamlink/pull/5072))
+- Changed: deprecation log messages to warnings, and added missing warnings for [previously deprecated things](https://streamlink.github.io/deprecations.html) ([#5072](https://github.com/streamlink/streamlink/pull/5072))
+- Deprecated: usage of `validate.text` in favor of `str` ([#5090](https://github.com/streamlink/streamlink/pull/5090))
+- Improved: `Streamlink` session option getters/setters ([#5076](https://github.com/streamlink/streamlink/pull/5076))
+- Fixed: incorrect inheritance of `NoPluginError` and removed unneeded `url` parameter from `NoStreamsError` ([#5088](https://github.com/streamlink/streamlink/pull/5088))
+- Fixed: error handling in Twitch access token acquirement ([#5011](https://github.com/streamlink/streamlink/pull/5011))
+- Fixed: dogan plugin ([#5053](https://github.com/streamlink/streamlink/pull/5053))
+- Fixed: ceskatelevize plugin, added sport/sportplus/decko ([#5063](https://github.com/streamlink/streamlink/pull/5063))
+- Added plugins: mixcloud ([#5096](https://github.com/streamlink/streamlink/pull/5096)), vkplay ([#5054](https://github.com/streamlink/streamlink/pull/5054))
+- Removed plugins: orf_tvthek ([#5104](https://github.com/streamlink/streamlink/pull/5104))
+
+[Full changelog](https://github.com/streamlink/streamlink/compare/5.1.2...5.2.0)
+
+
+## streamlink 5.1.2 (2022-12-03)
+
+Patch release:
+
+- Fixed: `ValueError` being raised while muxing streams ([#4998](https://github.com/streamlink/streamlink/pull/4998))
+- Fixed: ad filtering bug in Twitch plugin ([#5007](https://github.com/streamlink/streamlink/pull/5007))
+- Fixed: SVTPlay plugin ([#4994](https://github.com/streamlink/streamlink/pull/4994))
+- Fixed: TVP plugin ([#4997](https://github.com/streamlink/streamlink/pull/4997))
+- Docs: updated Linux AppImage and Windows builds install sections ([#4999](https://github.com/streamlink/streamlink/pull/4999))
+- Docs: fixed man page links in HTML docs ([#4995](https://github.com/streamlink/streamlink/pull/4995))
+
+[Full changelog](https://github.com/streamlink/streamlink/compare/5.1.1...5.1.2)
+
+
+## streamlink 5.1.1 (2022-11-23)
+
+Patch release:
+
+- Changed: `WebsocketClient` to use CA certificates bundled by `certifi` ([#4977](https://github.com/streamlink/streamlink/pull/4977))
+- Fixed: `SegmentedStreamReader` not properly getting closed ([#4972](https://github.com/streamlink/streamlink/pull/4972))
+- Fixed: CLI argument links throughout the entire docs ([#4989](https://github.com/streamlink/streamlink/pull/4989))
+- Build: added `certifi` as a direct dependency ([#4977](https://github.com/streamlink/streamlink/pull/4977))
+
+[Full changelog](https://github.com/streamlink/streamlink/compare/5.1.0...5.1.1)
+
+
 ## streamlink 5.1.0 (2022-11-14)
+
+Release highlights:
 
 - Added: debug log messages of the FFmpeg version in use ([#4861](https://github.com/streamlink/streamlink/pull/4861))  
   Checking the FFmpeg version can be disabled via `--ffmpeg-no-validation`

@@ -1,38 +1,51 @@
 import logging
+import warnings
+from datetime import timezone
+from inspect import currentframe, getframeinfo
 from io import StringIO
+from pathlib import Path
+from typing import Iterable, Tuple, Type
 from unittest.mock import patch
 
 import freezegun
 import pytest
 
 from streamlink import logger
+from streamlink.exceptions import StreamlinkDeprecationWarning, StreamlinkWarning
+
+
+@pytest.fixture()
+def output():
+    return StringIO()
+
+
+@pytest.fixture()
+def log(request, output: StringIO):
+    params = getattr(request, "param", {})
+    params.setdefault("format", "[{name}][{levelname}] {message}")
+    params.setdefault("style", "{")
+    fakeroot = logging.getLogger("streamlink.test")
+    with patch("streamlink.logger.root", fakeroot), \
+         patch("streamlink.utils.times.LOCAL", timezone.utc):
+        handler = logger.basicConfig(stream=output, **params)
+        assert isinstance(handler, logging.Handler)
+        yield fakeroot
+        logger.capturewarnings(False)
+        fakeroot.removeHandler(handler)
+        assert not fakeroot.handlers
 
 
 class TestLogging:
-    @pytest.fixture
-    def output(self):
-        return StringIO()
-
-    @pytest.fixture
-    def log(self, request, output: StringIO):
-        params = getattr(request, "param", {})
-        params.setdefault("format", "[{name}][{levelname}] {message}")
-        params.setdefault("style", "{")
-        fakeroot = logging.getLogger("streamlink.test")
-        with patch("streamlink.logger.root", fakeroot):
-            logger.basicConfig(stream=output, **params)
-            yield fakeroot
-
-    @pytest.fixture
+    @pytest.fixture()
     def log_failure(self, request, log: logging.Logger, output: StringIO):
         params = getattr(request, "param", {})
         root = logging.getLogger("streamlink")
-        with pytest.raises(Exception) as cm:
-            with patch("streamlink.logger.root", root):
+        with patch("streamlink.logger.root", root):
+            with pytest.raises(Exception) as cm:  # noqa: PT011
                 logger.basicConfig(stream=output, **params)
         return cm.value
 
-    @pytest.mark.parametrize("name,level", [
+    @pytest.mark.parametrize(("name", "level"), [
         ("none", logger.NONE),
         ("critical", logger.CRITICAL),
         ("error", logger.ERROR),
@@ -79,7 +92,7 @@ class TestLogging:
         log.debug("test")
         assert output.getvalue() == "[test][debug] test\n"
 
-    @pytest.mark.parametrize("loglevel,calllevel,expected", [
+    @pytest.mark.parametrize(("loglevel", "calllevel", "expected"), [
         (logger.DEBUG, logger.TRACE, ""),
         (logger.TRACE, logger.TRACE, "[test][trace] test\n"),
         (logger.TRACE, logger.DEBUG, "[test][debug] test\n"),
@@ -93,7 +106,7 @@ class TestLogging:
         assert output.getvalue() == expected
 
     # https://github.com/streamlink/streamlink/issues/4862
-    @pytest.mark.parametrize("level,levelname", [
+    @pytest.mark.parametrize(("level", "levelname"), [
         (logger.TRACE, "trace"),
         (logger.ALL, "all"),
     ])
@@ -107,7 +120,7 @@ class TestLogging:
             ("test_logger", levelname, "bar"),
         ]
 
-    @pytest.mark.parametrize("level,expected", [
+    @pytest.mark.parametrize(("level", "expected"), [
         (logger.DEBUG, ""),
         (logger.INFO, "[test][info] foo\n[test][info] bar\n"),
     ])
@@ -144,9 +157,108 @@ class TestLogging:
 
     @freezegun.freeze_time("2000-01-02T03:04:05.123456Z")
     @pytest.mark.parametrize("log", [
-        {"format": "[{asctime}][{name}][{levelname}] {message}", "datefmt": "%H:%M:%S.%f"},
+        {"format": "[{asctime}][{name}][{levelname}] {message}", "datefmt": "%H:%M:%S.%f%z"},
     ], indirect=True)
     def test_datefmt_custom(self, log: logging.Logger, output: StringIO):
         log.setLevel("info")
         log.info("test")
-        assert output.getvalue() == "[03:04:05.123456][test][info] test\n"
+        assert output.getvalue() == "[03:04:05.123456+0000][test][info] test\n"
+
+
+class TestCaptureWarnings:
+    @staticmethod
+    def _warn(messages: Iterable[Tuple[str, Type[Warning]]], filterwarnings=None):
+        frame = currentframe()
+        assert frame
+        assert frame.f_back
+        lineno = getframeinfo(frame.f_back).lineno
+
+        with warnings.catch_warnings():
+            warnings.filterwarnings(filterwarnings or "always")
+            for message, warningclass in messages:
+                warnings.warn(message, warningclass, stacklevel=2)
+
+        return lineno
+
+    def test_no_capture(self, log: logging.Logger, output: StringIO):
+        with pytest.warns(UserWarning, match=r"^Test warning$"):
+            self._warn([("Test warning", UserWarning)])
+        assert output.getvalue() == ""
+
+    @pytest.mark.parametrize("log", [{"capture_warnings": True}], indirect=["log"])
+    @pytest.mark.parametrize(("warning", "expected", "origin"), [
+        (("Test warning", UserWarning), "[warnings][userwarning] Test warning\n", True),
+        (("Test warning", DeprecationWarning), "[warnings][deprecationwarning] Test warning\n", True),
+        (("Test warning", FutureWarning), "[warnings][futurewarning] Test warning\n", True),
+        (("Test warning", StreamlinkWarning), "[warnings][streamlinkwarning] Test warning\n", False),
+        (("Test warning", StreamlinkDeprecationWarning), "[warnings][streamlinkdeprecation] Test warning\n", False),
+    ])
+    def test_capture(
+        self,
+        recwarn: pytest.WarningsRecorder,
+        log: logging.Logger,
+        output: StringIO,
+        warning: Tuple[str, Type[Warning]],
+        expected: str,
+        origin: bool,
+    ):
+        lineno = self._warn([warning])
+        expected += f"  {__file__}:{lineno}\n" if origin else ""
+        assert recwarn.list == []
+        assert output.getvalue() == expected
+
+    @pytest.mark.parametrize("log", [{"capture_warnings": True}], indirect=["log"])
+    def test_capture_logrecord(
+        self,
+        recwarn: pytest.WarningsRecorder,
+        caplog: pytest.LogCaptureFixture,
+        log: logging.Logger,
+    ):
+        lineno = self._warn([("Test warning", UserWarning)])
+        path = Path(__file__)
+        assert recwarn.list == []
+        assert [(r.name, r.levelname, r.pathname, r.filename, r.module, r.lineno, r.message) for r in caplog.records] == [
+            ("warnings", "userwarning", __file__, path.name, path.stem, lineno, f"Test warning\n  {__file__}:{lineno}"),
+        ]
+
+    @pytest.mark.parametrize("log", [{"capture_warnings": True}], indirect=["log"])
+    def test_capture_consecutive(
+        self,
+        recwarn: pytest.WarningsRecorder,
+        log: logging.Logger,
+        output: StringIO,
+    ):
+        lineno = self._warn([("foo", DeprecationWarning), ("bar", FutureWarning)])
+        assert recwarn.list == []
+        assert output.getvalue() == (
+            f"[warnings][deprecationwarning] foo\n  {__file__}:{lineno}\n"
+            + f"[warnings][futurewarning] bar\n  {__file__}:{lineno}\n"
+        )
+
+    @pytest.mark.parametrize("log", [{"capture_warnings": True}], indirect=["log"])
+    def test_capture_consecutive_once(
+        self,
+        recwarn: pytest.WarningsRecorder,
+        log: logging.Logger,
+        output: StringIO,
+    ):
+        lineno = self._warn([("foo", UserWarning), ("foo", UserWarning)], "once")
+        assert recwarn.list == []
+        assert output.getvalue() == f"[warnings][userwarning] foo\n  {__file__}:{lineno}\n"
+
+    @pytest.mark.parametrize("log", [{"capture_warnings": True}], indirect=["log"])
+    @pytest.mark.parametrize("warning", [
+        ("Test warning", UserWarning),
+        ("Test warning", DeprecationWarning),
+        ("Test warning", FutureWarning),
+    ])
+    def test_ignored(
+        self,
+        recwarn: pytest.WarningsRecorder,
+        log: logging.Logger,
+        output: StringIO,
+        warning: Tuple[str, Type[Warning]],
+    ):
+        self._warn([warning], filterwarnings="ignore")
+        assert recwarn.list == []
+        assert output.getvalue() == ""
