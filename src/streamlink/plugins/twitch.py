@@ -267,15 +267,11 @@ class UsherService:
         except KeyError:
             pass
         if not is_adfree:
-            if (
-                self.session.get_plugin_option("twitch", "ttvlol-adblock")
-                and self.session.http.get("https://api.ttv.lol/ping").ok
-            ):
-                url = f"https://api.ttv.lol/playlist/{channel}.m3u8%3Fallow_source%3Dtrue%26fast_bread%3Dtrue"
+            if self.session.get_plugin_option("twitch", "ttvlol-adblock"):
+                proxy = self.session.get_plugin_option("twitch", "ttvlol-proxy")
+                url = f"https://{proxy}/playlist/{channel}.m3u8%3Fallow_source%3Dtrue%26fast_bread%3Dtrue"
                 self.session.http.headers.update({"x-donate-to": "https://ttv.lol/donate"})
                 params = {}
-            if self.session.get_plugin_option("twitch", "purple-adblock"):
-                url = f"https://jupter.ga/channel/{channel}"
         return self._create_url(url, **params)
 
     def video(self, video_id, **extra_params):
@@ -617,7 +613,7 @@ class TwitchAPI:
 )
 @pluginargument(
     "ttvlol-proxy",
-    action="store_true",
+    default='api.ttv.lol'
     help="""
     Use specified proxy for TTV LOL Adblock.
     If unspecified, the default one (api.ttv.lol) will be used.
