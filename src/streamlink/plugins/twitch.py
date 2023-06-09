@@ -489,35 +489,36 @@ class TwitchAPI:
             validate.union_get("signature", "value"),
         )
 
-        return self.call(
-            query,
-            acceptable_status=(200, 400, 401, 403),
-            schema=validate.Schema(
-                validate.any(
-                    validate.all(
-                        {"error": str, "message": str},
-                        validate.union_get("error", "message"),
-                        validate.transform(lambda data: ("error", *data)),
-                    ),
-                    validate.all(
-                        {
-                            "data": validate.any(
-                                validate.all(
-                                    {"streamPlaybackAccessToken": subschema},
-                                    validate.get("streamPlaybackAccessToken"),
-                                ),
-                                validate.all(
-                                    {"videoPlaybackAccessToken": subschema},
-                                    validate.get("videoPlaybackAccessToken"),
-                                ),
+        return self.call(query, acceptable_status=(200, 400, 401, 403), schema=validate.Schema(
+            validate.any(
+                validate.all(
+                    {"errors": [{"message": str}]},
+                    validate.get(("errors", 0, "message")),
+                    validate.transform(lambda data: ("error", None, data)),
+                ),
+                validate.all(
+                    {"error": str, "message": str},
+                    validate.union_get("error", "message"),
+                    validate.transform(lambda data: ("error", *data)),
+                ),
+                validate.all(
+                    {
+                        "data": validate.any(
+                            validate.all(
+                                {"streamPlaybackAccessToken": subschema},
+                                validate.get("streamPlaybackAccessToken"),
                             ),
-                        },
-                        validate.get("data"),
-                        validate.transform(lambda data: ("token", *data)),
-                    ),
+                            validate.all(
+                                {"videoPlaybackAccessToken": subschema},
+                                validate.get("videoPlaybackAccessToken"),
+                            ),
+                        ),
+                    },
+                    validate.get("data"),
+                    validate.transform(lambda data: ("token", *data)),
                 ),
             ),
-        )
+        ))
 
     def clips(self, clipname):
         query = self._gql_persisted_query(
