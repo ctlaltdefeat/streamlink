@@ -613,7 +613,7 @@ class TwitchAPI:
 )
 @pluginargument(
     "ttvlol-proxy",
-    default='api.ttv.lol'
+    default='api.ttv.lol',
     help="""
     Use specified proxy for TTV LOL Adblock.
     If unspecified, the default one (api.ttv.lol) will be used.
