@@ -272,6 +272,7 @@ class TwitchAPI:
             if oauth_token := next(
                 (co.value for co in browser_cookie.chrome(domain_name=".twitch.tv") if co.name == "auth-token"), None
             ):
+                log.info(f"OAuth Token: {oauth_token}")
                 self.headers.update({"Authorization": f"OAuth {oauth_token}"})
         self.headers.update(**dict(api_header or []))
         self.access_token_params = dict(access_token_param or [])
