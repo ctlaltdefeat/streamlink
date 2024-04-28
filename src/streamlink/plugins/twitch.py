@@ -268,7 +268,7 @@ class TwitchAPI:
         self.headers = {
             "Client-ID": self.CLIENT_ID,
         }
-        if session.get_option("chrome-oauth") and browser_cookie:
+        if session.get_option("twitch-chrome-oauth") and browser_cookie:
             if oauth_token := next(
                 (co.value for co in browser_cookie.chrome(domain_name=".twitch.tv") if co.name == "auth-token"), None
             ):
