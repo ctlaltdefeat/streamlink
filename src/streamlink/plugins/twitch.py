@@ -249,8 +249,8 @@ class UsherService:
         except KeyError:
             pass
         if not is_adfree:
-            if self.session.get_option("twitch", "ttvlol-adblock"):
-                proxy = self.session.get_option("twitch", "ttvlol-proxy")
+            if self.session.get_option("ttvlol-adblock"):
+                proxy = self.session.get_option("ttvlol-proxy")
                 url = f"https://{proxy}/playlist/{channel}.m3u8%3Fallow_source%3Dtrue%26fast_bread%3Dtrue"
                 self.session.http.headers.update({"x-donate-to": "https://ttv.lol/donate"})
                 params = {}
@@ -268,7 +268,7 @@ class TwitchAPI:
         self.headers = {
             "Client-ID": self.CLIENT_ID,
         }
-        if session.get_option("twitch", "chrome-oauth") and browser_cookie:
+        if session.get_option("chrome-oauth") and browser_cookie:
             if oauth_token := next(
                 (co.value for co in browser_cookie.chrome(domain_name=".twitch.tv") if co.name == "auth-token"), None
             ):
