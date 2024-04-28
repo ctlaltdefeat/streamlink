@@ -1,10 +1,8 @@
 import ast
-import inspect
 import logging
 import operator
 import re
 import time
-import warnings
 from contextlib import suppress
 from functools import partial
 from http.cookiejar import Cookie
@@ -14,12 +12,13 @@ from typing import (
     Callable,
     ClassVar,
     Dict,
+    Iterable,
     List,
+    Literal,
     Match,
     NamedTuple,
     Optional,
     Pattern,
-    Sequence,
     Tuple,
     Type,
     TypeVar,
@@ -28,6 +27,8 @@ from typing import (
 
 import requests.cookies
 
+import streamlink.utils.args
+import streamlink.utils.times
 from streamlink.cache import Cache
 from streamlink.exceptions import FatalPluginError, NoStreamsError, PluginError
 from streamlink.options import Argument, Arguments, Options
@@ -36,6 +37,21 @@ from streamlink.user_input import UserInputRequester
 
 if TYPE_CHECKING:  # pragma: no cover
     from streamlink.session import Streamlink
+
+
+#: See the :func:`~.pluginargument` decorator
+_PLUGINARGUMENT_TYPE_REGISTRY: Dict[str, Callable[[Any], Any]] = {
+    "int": int,
+    "float": float,
+    "bool": streamlink.utils.args.boolean,
+    "comma_list": streamlink.utils.args.comma_list,
+    "comma_list_filter": streamlink.utils.args.comma_list_filter,
+    "filesize": streamlink.utils.args.filesize,
+    "keyvalue": streamlink.utils.args.keyvalue,
+    "num": streamlink.utils.args.num,
+    "hours_minutes_seconds": streamlink.utils.times.hours_minutes_seconds,
+    "hours_minutes_seconds_float": streamlink.utils.times.hours_minutes_seconds_float,
+}
 
 
 log = logging.getLogger(__name__)
@@ -47,7 +63,7 @@ BIT_RATE_WEIGHT_RATIO = 2.8
 
 ALT_WEIGHT_MOD = 0.01
 
-QUALITY_WEIGTHS_EXTRA = {
+QUALITY_WEIGHTS_EXTRA = {
     "other": {
         "live": 1080,
     },
@@ -81,7 +97,7 @@ _COOKIE_KEYS = \
 
 
 def stream_weight(stream):
-    for group, weights in QUALITY_WEIGTHS_EXTRA.items():
+    for group, weights in QUALITY_WEIGHTS_EXTRA.items():
         if stream in weights:
             return weights[stream], group
 
@@ -194,7 +210,7 @@ class _MCollection(List[MType]):
         self._names: Dict[str, MType] = {}
 
     def __getitem__(self, item):
-        return self._names[item] if type(item) is str else super().__getitem__(item)
+        return self._names[item] if isinstance(item, str) else super().__getitem__(item)
 
 
 class Matchers(_MCollection[Matcher]):
@@ -216,16 +232,6 @@ class Matches(_MCollection[Optional[Match]]):
         self._names.update((matcher.name, match) for matcher, match in matches if matcher.name)
 
         return next(((matcher.pattern, match) for matcher, match in matches if match is not None), (None, None))
-
-
-# Add front- and back-wrappers to the deprecated plugin's method resolution order (see Plugin.__new__)
-class PluginWrapperMeta(type):
-    def mro(cls):
-        # cls.__base__ is the PluginWrapperFront which is based on the deprecated plugin class
-        mro = list(cls.__base__.__mro__)
-        # cls is the PluginWrapperBack and needs to be inserted after the deprecated plugin class
-        mro.insert(2, cls)
-        return mro
 
 
 class Plugin:
@@ -260,6 +266,12 @@ class Plugin:
     match: Optional[Match] = None
     """A reference to the :class:`re.Match` result of the first matching matcher"""
 
+    options: Options
+    """Plugin options, initialized with the user-set values of the plugin's arguments"""
+
+    cache: Cache
+    """Plugin cache object, used to store plugin-specific data other than HTTP session cookies"""
+
     # plugin metadata attributes
     id: Optional[str] = None
     """Metadata 'id' attribute: unique stream ID, etc."""
@@ -270,62 +282,19 @@ class Plugin:
     category: Optional[str] = None
     """Metadata 'category' attribute: name of a game being played, a music genre, etc."""
 
-    options = Options()
     _url: str = ""
 
-    # deprecated
-    can_handle_url: Callable[[str], bool]
-    # deprecated
-    priority: Callable[[str], int]
-
-    # Handle deprecated plugin constructors which only take the url argument
-    def __new__(cls, *args, **kwargs):
-        # Ignore plugins without custom constructors or wrappers
-        if cls.__init__ is Plugin.__init__ or hasattr(cls, "_IS_DEPRECATED_PLUGIN_WRAPPER"):
-            return super().__new__(cls)
-
-        # Ignore custom constructors which have a formal "session" parameter or a variable positional parameter
-        sig = inspect.signature(cls.__init__).parameters
-        if "session" in sig or any(param.kind == inspect.Parameter.VAR_POSITIONAL for param in sig.values()):
-            return super().__new__(cls)
-
-        # Wrapper class which overrides the very first constructor in the MRO
-        # noinspection PyAbstractClass
-        class PluginWrapperFront(cls):
-            _IS_DEPRECATED_PLUGIN_WRAPPER = True
-
-            # The __module__ value needs to be copied
-            __module__ = cls.__module__
-
-            def __init__(self, session, url):
-                # Take any arguments, but only pass the URL to the custom constructor of the deprecated plugin
-                # noinspection PyArgumentList
-                super().__init__(url)
-                warnings.warn(
-                    f"Initialized {self.module} plugin with deprecated constructor",
-                    FutureWarning,
-                    stacklevel=2,
-                )
-
-        # Wrapper class which comes after the deprecated plugin in the MRO
-        # noinspection PyAbstractClass
-        class PluginWrapperBack(PluginWrapperFront, metaclass=PluginWrapperMeta):
-            def __init__(self, *_, **__):
-                # Take any arguments from the super() call of the constructor of the deprecated plugin,
-                # but pass the right args and keywords to the Plugin constructor
-                super().__init__(*args, **kwargs)
-
-        return cls.__new__(PluginWrapperBack, *args, **kwargs)
-
-    def __init__(self, session: "Streamlink", url: str):
+    def __init__(self, session: "Streamlink", url: str, options: Optional[Options] = None):
         """
         :param session: The Streamlink session instance
         :param url: The input URL used for finding and resolving streams
+        :param options: An optional :class:`Options` instance
         """
 
         modulename = self.__class__.__module__
         self.module = modulename.split(".")[-1]
         self.logger = logging.getLogger(modulename)
+        self.options = Options() if options is None else options
         self.cache = Cache(
             filename="plugin-cache.json",
             key_prefix=self.module,
@@ -353,13 +322,11 @@ class Plugin:
         if self.matchers:
             self.matcher, self.match = self.matches.update(self.matchers, value)
 
-    @classmethod
-    def set_option(cls, key, value):
-        cls.options.set(key, value)
+    def set_option(self, key, value):
+        self.options.set(key, value)
 
-    @classmethod
-    def get_option(cls, key):
-        return cls.options.get(key)
+    def get_option(self, key):
+        return self.options.get(key)
 
     @classmethod
     def get_argument(cls, key):
@@ -387,7 +354,7 @@ class Plugin:
 
         Returns a :class:`dict` containing the streams, where the key is
         the name of the stream (most commonly the quality name), with the value
-        being a :class:`Stream` instance.
+        being a :class:`Stream <streamlink.stream.Stream>` instance.
 
         The result can contain the synonyms **best** and **worst** which
         point to the streams which are likely to be of highest and
@@ -413,7 +380,7 @@ class Plugin:
 
         :param stream_types: A list of stream types to return
         :param sorting_excludes: Specify which streams to exclude from the best/worst synonyms
-        :returns: A :class:`dict` of stream names and :class:`streamlink.stream.Stream` instances
+        :returns: A :class:`dict` of stream names and :class:`Stream <streamlink.stream.Stream>` instances
         """
 
         try:
@@ -516,8 +483,9 @@ class Plugin:
         """
         Implement the stream and metadata retrieval here.
 
-        Needs to return either a dict of :class:`streamlink.stream.Stream` instances mapped by stream name, or needs to act
-        as a generator which yields tuples of stream names and :class:`streamlink.stream.Stream` instances.
+        Needs to return either a dict of :class:`Stream <streamlink.stream.Stream>` instances mapped by stream name,
+        or needs to act as a generator which yields tuples of stream names and :class:`Stream <streamlink.stream.Stream>`
+        instances.
         """
 
         raise NotImplementedError
@@ -606,7 +574,7 @@ class Plugin:
     def clear_cookies(self, cookie_filter: Optional[Callable] = None) -> List[str]:
         """
         Removes all saved cookies for this plugin. To filter the cookies that are deleted
-        specify the ``cookie_filter`` argument (see :func:`save_cookies`).
+        specify the ``cookie_filter`` argument (see :meth:`save_cookies`).
 
         :param cookie_filter: a function to filter the cookies
         :type cookie_filter: function
@@ -656,7 +624,7 @@ def pluginmatcher(
     A matcher consists of a compiled regular expression pattern for the plugin's input URL,
     a priority value and an optional name.
     The priority value determines which plugin gets chosen by
-    :meth:`Streamlink.resolve_url <streamlink.Streamlink.resolve_url>` if multiple plugins match the input URL.
+    :meth:`Streamlink.resolve_url() <streamlink.session.Streamlink.resolve_url>` if multiple plugins match the input URL.
     The matcher name can be used for accessing it and its matching result when multiple matchers are defined.
 
     Plugins must at least have one matcher. If multiple matchers are defined, then the first matching one
@@ -699,19 +667,39 @@ def pluginmatcher(
     return decorator
 
 
+_TChoices = TypeVar("_TChoices", bound=Iterable)
+
+
+# noinspection GrazieInspection,PyShadowingBuiltins
 def pluginargument(
     name: str,
+    action: Optional[str] = None,
+    nargs: Optional[Union[int, Literal["?", "*", "+"]]] = None,
+    const: Any = None,
+    default: Any = None,
+    type: Optional[Union[str, Callable[[Any], Union[_TChoices, Any]]]] = None,  # noqa: A002
+    type_args: Optional[Union[list, tuple]] = None,
+    type_kwargs: Optional[Dict[str, Any]] = None,
+    choices: Optional[_TChoices] = None,
     required: bool = False,
-    requires: Optional[Union[str, Sequence[str]]] = None,
+    help: Optional[str] = None,  # noqa: A002
+    metavar: Optional[Union[str, List[str], Tuple[str, ...]]] = None,
+    dest: Optional[str] = None,
+    requires: Optional[Union[str, List[str], Tuple[str, ...]]] = None,
     prompt: Optional[str] = None,
     sensitive: bool = False,
     argument_name: Optional[str] = None,
-    dest: Optional[str] = None,
-    is_global: bool = False,
-    **options,
 ) -> Callable[[Type[Plugin]], Type[Plugin]]:
     """
-    Decorator for plugin arguments. Takes the same arguments as :class:`streamlink.options.Argument`.
+    Decorator for plugin arguments. Takes the same arguments as :class:`Argument <streamlink.options.Argument>`.
+
+    One exception is the ``type`` argument, which also accepts a ``str`` value:
+
+    Plugins built into Streamlink **must** reference the used argument-type function by name, so the pluginargument data
+    can be JSON-serialized. ``type_args`` and ``type_kwargs`` can be used to parametrize the type-argument function,
+    but their values **must** only consist of literal objects.
+
+    The available functions are defined in the :data:`~._PLUGINARGUMENT_TYPE_REGISTRY`.
 
     .. code-block:: python
 
@@ -737,21 +725,37 @@ def pluginargument(
     assuming the plugin's module name is ``myplugin``.
     """
 
+    _type: Optional[Callable[[Any], _TChoices]]
+    if not isinstance(type, str):
+        _type = type
+    else:
+        if type not in _PLUGINARGUMENT_TYPE_REGISTRY:
+            raise TypeError(f"Invalid pluginargument type {type}")
+        _type = _PLUGINARGUMENT_TYPE_REGISTRY[type]
+        if type_args is not None or type_kwargs is not None:
+            _type = _type(*(type_args or ()), **(type_kwargs or {}))
+
     arg = Argument(
-        name,
+        name=name,
+        action=action,
+        nargs=nargs,
+        const=const,
+        default=default,
+        type=_type,
+        choices=choices,
         required=required,
+        help=help,
+        metavar=metavar,
+        dest=dest,
         requires=requires,
         prompt=prompt,
         sensitive=sensitive,
         argument_name=argument_name,
-        dest=dest,
-        is_global=is_global,
-        **options,
     )
 
     def decorator(cls: Type[Plugin]) -> Type[Plugin]:
         if not issubclass(cls, Plugin):
-            raise TypeError(f"{repr(cls)} is not a Plugin")
+            raise TypeError(f"{repr(cls)} is not a Plugin")  # noqa: RUF010  # builtins.repr gets monkeypatched in tests
         if cls.arguments is None:
             cls.arguments = Arguments()
         cls.arguments.add(arg)

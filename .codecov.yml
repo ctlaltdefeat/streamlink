@@ -48,3 +48,8 @@ coverage:
         target: 100
         paths:
           - "tests/"
+      build_backend:
+        # build_backend should always be fully covered
+        target: 100
+        paths:
+          - "build_backend/"

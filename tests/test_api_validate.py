@@ -4,28 +4,15 @@ from textwrap import dedent
 import pytest
 from lxml.etree import Element, tostring as etree_tostring
 
-from streamlink.exceptions import PluginError, StreamlinkDeprecationWarning
+from streamlink.exceptions import PluginError
 from streamlink.plugin.api import validate
 
 # noinspection PyProtectedMember
-from streamlink.plugin.api.validate._exception import ValidationError
+from streamlink.plugin.api.validate._exception import ValidationError  # noqa: PLC2701
 
 
 def assert_validationerror(exception, expected):
     assert str(exception) == dedent(expected).strip("\n")
-
-
-def test_text_is_str(recwarn: pytest.WarningsRecorder):
-    assert "text" not in getattr(validate, "__dict__", {})
-    assert "text" in getattr(validate, "__all__", [])
-    assert validate.text is str, "Exports text as str alias for backwards compatiblity"
-    assert [(record.category, str(record.message), record.filename) for record in recwarn.list] == [
-        (
-            StreamlinkDeprecationWarning,
-            "`streamlink.plugin.api.validate.text` is deprecated. Use `str` instead.",
-            __file__,
-        ),
-    ]
 
 
 class TestSchema:
@@ -880,22 +867,54 @@ class TestUnionSchema:
 
 class TestLengthValidator:
     @pytest.mark.parametrize(
-        ("minlength", "value"),
-        [(3, "foo"), (3, [1, 2, 3])],
+        ("args", "value"),
+        [
+            ((3,), "abc"),
+            ((3,), [1, 2, 3]),
+            ((3,), "abcd"),
+            ((3,), [1, 2, 3, 4]),
+            ((3, "lt"), "ab"),
+            ((3, "lt"), [1, 2]),
+            ((3, "le"), "ab"),
+            ((3, "le"), [1, 2]),
+            ((3, "le"), "abc"),
+            ((3, "le"), [1, 2, 3]),
+            ((3, "eq"), "abc"),
+            ((3, "eq"), [1, 2, 3]),
+            ((3, "ge"), "abc"),
+            ((3, "ge"), [1, 2, 3]),
+            ((3, "ge"), "abcd"),
+            ((3, "ge"), [1, 2, 3, 4]),
+            ((3, "gt"), "abcd"),
+            ((3, "gt"), [1, 2, 3, 4]),
+        ],
     )
-    def test_success(self, minlength, value):
-        assert validate.validate(validate.length(minlength), value)
+    def test_success(self, args, value):
+        assert validate.validate(validate.length(*args), value) == value
 
     @pytest.mark.parametrize(
-        ("minlength", "value"),
-        [(3, "foo"), (3, [1, 2, 3])],
+        ("args", "value", "error"),
+        [
+            ((3,), "ab", "Length must be >=3, but value is 2"),
+            ((3,), [1, 2], "Length must be >=3, but value is 2"),
+            ((3, "lt"), "abc", "Length must be <3, but value is 3"),
+            ((3, "lt"), [1, 2, 3], "Length must be <3, but value is 3"),
+            ((3, "le"), "abcd", "Length must be <=3, but value is 4"),
+            ((3, "le"), [1, 2, 3, 4], "Length must be <=3, but value is 4"),
+            ((3, "eq"), "ab", "Length must be ==3, but value is 2"),
+            ((3, "eq"), [1, 2], "Length must be ==3, but value is 2"),
+            ((3, "ge"), "ab", "Length must be >=3, but value is 2"),
+            ((3, "ge"), [1, 2], "Length must be >=3, but value is 2"),
+            ((3, "gt"), "abc", "Length must be >3, but value is 3"),
+            ((3, "gt"), [1, 2, 3], "Length must be >3, but value is 3"),
+        ],
     )
-    def test_failure(self, minlength, value):
+    def test_failure(self, args, value, error):
         with pytest.raises(ValidationError) as cm:
-            validate.validate(validate.length(minlength + 1), value)
-        assert_validationerror(cm.value, """
+            validate.validate(validate.length(*args), value)
+        assert_validationerror(cm.value, f"""
             ValidationError(length):
-              Minimum length is 4, but value is 3
+              {error}
         """)
 
 
@@ -1324,13 +1343,20 @@ class TestParseQsdValidator:
             validate.parse_qsd(),
             "foo=bar&foo=baz&qux=quux",
         ) == {"foo": "baz", "qux": "quux"}
+        assert validate.validate(
+            validate.parse_qsd(),
+            b"foo=bar&foo=baz&qux=quux",
+        ) == {b"foo": b"baz", b"qux": b"quux"}
 
     def test_failure(self):
         with pytest.raises(ValidationError) as cm:
             validate.validate(validate.parse_qsd(), 123)
         assert_validationerror(cm.value, """
-            ValidationError:
-              Unable to parse query string: 'int' object has no attribute 'decode' (123)
+            ValidationError(AnySchema):
+              ValidationError(type):
+                Type of 123 should be str, but is int
+              ValidationError(type):
+                Type of 123 should be bytes, but is int
         """)
 
 
@@ -1465,4 +1491,4 @@ class TestValidationError:
         assert_validationerror(err, """
             ValidationError:
               foo <Some really long error message that exceeds the maximum...> bar <'Some really long error message that exceeds the maximu...> baz
-        """)  # noqa: 501
+        """)  # noqa: E501

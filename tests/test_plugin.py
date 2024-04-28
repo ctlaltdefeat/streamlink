@@ -1,14 +1,17 @@
+import argparse
 import logging
 import re
 import time
+from contextlib import nullcontext
 from operator import eq, gt, lt
-from typing import Type
+from typing import Any, Type
 from unittest.mock import Mock, call, patch
 
 import freezegun
 import pytest
 import requests.cookies
 
+from streamlink.options import Options
 from streamlink.plugin import (
     HIGH_PRIORITY,
     NORMAL_PRIORITY,
@@ -20,7 +23,13 @@ from streamlink.plugin import (
 )
 
 # noinspection PyProtectedMember
-from streamlink.plugin.plugin import _COOKIE_KEYS, Matcher, parse_params, stream_weight
+from streamlink.plugin.plugin import (
+    _COOKIE_KEYS,  # noqa: PLC2701
+    _PLUGINARGUMENT_TYPE_REGISTRY,  # noqa: PLC2701
+    Matcher,
+    parse_params,
+    stream_weight,
+)
 from streamlink.session import Streamlink
 
 
@@ -41,12 +50,6 @@ class CustomConstructorOnePlugin(FakePlugin):
 class CustomConstructorTwoPlugin(FakePlugin):
     def __init__(self, session, url):
         super().__init__(session, url)
-
-
-class DeprecatedPlugin(FakePlugin):
-    def __init__(self, url):
-        super().__init__(url)  # type: ignore[call-arg]
-        self.custom_attribute = url.upper()
 
 
 class TestPlugin:
@@ -78,34 +81,15 @@ class TestPlugin:
 
         assert mock_load_cookies.call_args_list == [call()]
 
-    def test_constructor_wrapper(self, recwarn: pytest.WarningsRecorder):
-        session = Mock()
-        with patch("streamlink.plugin.plugin.Cache") as mock_cache, \
-             patch.object(DeprecatedPlugin, "load_cookies") as mock_load_cookies:
-            plugin = DeprecatedPlugin(session, "http://localhost")  # type: ignore[call-arg]
+    def test_constructor_options(self):
+        one = FakePlugin(Mock(), "https://mocked", Options({"key": "val"}))
+        two = FakePlugin(Mock(), "https://mocked")
+        assert one.get_option("key") == "val"
+        assert two.get_option("key") is None
 
-        assert isinstance(plugin, DeprecatedPlugin)
-        assert plugin.custom_attribute == "HTTP://LOCALHOST"
-        assert [(record.category, str(record.message), record.filename) for record in recwarn.list] == [
-            (
-                FutureWarning,
-                "Initialized test_plugin plugin with deprecated constructor",
-                __file__,
-            ),
-        ]
-
-        assert plugin.session is session
-        assert plugin.url == "http://localhost"
-
-        assert plugin.module == "test_plugin"
-
-        assert isinstance(plugin.logger, logging.Logger)
-        assert plugin.logger.name == "tests.test_plugin"
-
-        assert mock_cache.call_args_list == [call(filename="plugin-cache.json", key_prefix="test_plugin")]
-        assert plugin.cache == mock_cache()
-
-        assert mock_load_cookies.call_args_list == [call()]
+        one.set_option("key", "other")
+        assert one.get_option("key") == "other"
+        assert two.get_option("key") is None
 
 
 class TestPluginMatcher:
@@ -227,6 +211,10 @@ class TestPluginArguments:
             PluginArgument("baz", dest="_baz", help="BAZ"),
         )
 
+    def test_pluginargument_type_registry(self):
+        assert _PLUGINARGUMENT_TYPE_REGISTRY
+        assert all(callable(value) for value in _PLUGINARGUMENT_TYPE_REGISTRY.values())
+
     @pytest.mark.parametrize("pluginclass", [DecoratedPlugin, ClassAttrPlugin])
     def test_arguments(self, pluginclass):
         assert pluginclass.arguments is not None
@@ -241,7 +229,80 @@ class TestPluginArguments:
 
         assert tuple(arg.name for arg in MixedPlugin.arguments) == ("qux", "foo", "bar", "baz")
 
-    def test_decorator_typerror(self):
+    @pytest.mark.parametrize(("options", "args", "expected", "raises"), [
+        pytest.param(
+            {"type": "int"},
+            ["--myplugin-foo", "123"],
+            123,
+            nullcontext(),
+            id="int",
+        ),
+        pytest.param(
+            {"type": "float"},
+            ["--myplugin-foo", "123.456"],
+            123.456,
+            nullcontext(),
+            id="float",
+        ),
+        pytest.param(
+            {"type": "bool"},
+            ["--myplugin-foo", "yes"],
+            True,
+            nullcontext(),
+            id="bool",
+        ),
+        pytest.param(
+            {"type": "keyvalue"},
+            ["--myplugin-foo", "key=value"],
+            ("key", "value"),
+            nullcontext(),
+            id="keyvalue",
+        ),
+        pytest.param(
+            {"type": "comma_list_filter", "type_args": (["one", "two", "four"], )},
+            ["--myplugin-foo", "one,two,three,four"],
+            ["one", "two", "four"],
+            nullcontext(),
+            id="comma_list_filter - args",
+        ),
+        pytest.param(
+            {"type": "comma_list_filter", "type_kwargs": {"acceptable": ["one", "two", "four"]}},
+            ["--myplugin-foo", "one,two,three,four"],
+            ["one", "two", "four"],
+            nullcontext(),
+            id="comma_list_filter - kwargs",
+        ),
+        pytest.param(
+            {"type": "hours_minutes_seconds"},
+            ["--myplugin-foo", "1h2m3s"],
+            3723,
+            nullcontext(),
+            id="hours_minutes_seconds",
+        ),
+        pytest.param(
+            {"type": "UNKNOWN"},
+            None,
+            None,
+            pytest.raises(TypeError),
+            id="UNKNOWN",
+        ),
+    ])
+    def test_type_argument_map(self, options: dict, args: list, expected: Any, raises: nullcontext):
+        class MyPlugin(FakePlugin):
+            pass
+
+        with raises:
+            pluginargument("foo", **options)(MyPlugin)
+            assert MyPlugin.arguments is not None
+            pluginarg = MyPlugin.arguments.get("foo")
+            assert pluginarg
+
+            parser = argparse.ArgumentParser()
+            parser.add_argument(pluginarg.argument_name("myplugin"), **pluginarg.options)
+            namespace = parser.parse_args(args)
+            assert namespace.myplugin_foo == expected
+
+    def test_decorator_typeerror(self):
         with patch("builtins.repr", Mock(side_effect=lambda obj: obj.__name__)):
             with pytest.raises(TypeError) as cm:
                 # noinspection PyUnusedLocal
@@ -274,26 +335,28 @@ def test_plugin_metadata(attr):
     assert getter() == "baz qux"
 
 
-# TODO: python 3.7 removal: move this as static method to the TestCookies class
-def _create_cookie_dict(name, value, expires=None):
-    return dict(
-        version=0,
-        name=name,
-        value=value,
-        port=None,
-        domain="test.se",
-        path="/",
-        secure=False,
-        expires=expires,
-        discard=True,
-        comment=None,
-        comment_url=None,
-        rest={"HttpOnly": None},
-        rfc2109=False,
-    )
-
-
 class TestCookies:
+    @staticmethod
+    def create_cookie_dict(name, value, expires=None):
+        return dict(
+            version=0,
+            name=name,
+            value=value,
+            port=None,
+            domain="test.se",
+            path="/",
+            secure=False,
+            expires=expires,
+            discard=True,
+            comment=None,
+            comment_url=None,
+            rest={"HttpOnly": None},
+            rfc2109=False,
+        )
+
+    # TODO: py39 support end: remove explicit dummy context binding of static method
+    _create_cookie_dict = create_cookie_dict.__get__(object)
+
     @pytest.fixture()
     def pluginclass(self):
         class MyPlugin(FakePlugin):
@@ -355,7 +418,7 @@ class TestCookies:
         plugin.save_cookies(lambda cookie: cookie.name == "test-name1", default_expires=3600)
         assert plugincache.set.call_args_list == [call(
             "__cookie:test-name1:test.se:80:/",
-            _create_cookie_dict("test-name1", "test-value1", None),
+            self.create_cookie_dict("test-name1", "test-value1", None),
             3600,
         )]
         assert logger.debug.call_args_list == [call("Saved cookies: test-name1")]
@@ -375,7 +438,7 @@ class TestCookies:
         plugin.save_cookies(default_expires=60)
         assert plugincache.set.call_args_list == [call(
             "__cookie:test-name:test.se:80:/",
-            _create_cookie_dict("test-name", "test-value", 3600),
+            self.create_cookie_dict("test-name", "test-value", 3600),
             3600,
         )]
 

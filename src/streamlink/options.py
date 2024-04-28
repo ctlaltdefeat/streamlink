@@ -1,7 +1,19 @@
-import warnings
-from typing import Any, Callable, ClassVar, Dict, Iterator, Mapping, Optional, Sequence, Union
-
-from streamlink.exceptions import StreamlinkDeprecationWarning
+import argparse
+from typing import (
+    Any,
+    Callable,
+    ClassVar,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Tuple,
+    TypeVar,
+    Union,
+)
 
 
 class Options:
@@ -13,7 +25,10 @@ class Options:
     """
 
     _MAP_GETTERS: ClassVar[Mapping[str, Callable[[Any, str], Any]]] = {}
+    """Optional getter mapping for :class:`Options` subclasses"""
+
     _MAP_SETTERS: ClassVar[Mapping[str, Callable[[Any, str, Any], None]]] = {}
+    """Optional setter mapping for :class:`Options` subclasses"""
 
     def __init__(self, defaults: Optional[Mapping[str, Any]] = None):
         if not defaults:
@@ -32,10 +47,14 @@ class Options:
         return {normalize_key(key): value for key, value in src.items()}
 
     def clear(self) -> None:
+        """Restore default options"""
+
         self.options.clear()
         self.options.update(self.defaults.copy())
 
     def get(self, key: str) -> Any:
+        """Get the stored value of a specific key"""
+
         normalized = self._normalize_key(key)
         method = self._MAP_GETTERS.get(normalized)
         if method is not None:
@@ -44,10 +63,14 @@ class Options:
             return self.options.get(normalized)
 
     def get_explicit(self, key: str) -> Any:
+        """Get the stored value of a specific key and ignore any get-mappings"""
+
         normalized = self._normalize_key(key)
         return self.options.get(normalized)
 
     def set(self, key: str, value: Any) -> None:
+        """Set the value for a specific key"""
+
         normalized = self._normalize_key(key)
         method = self._MAP_SETTERS.get(normalized)
         if method is not None:
@@ -56,10 +79,14 @@ class Options:
             self.options[normalized] = value
 
     def set_explicit(self, key: str, value: Any) -> None:
+        """Set the value for a specific key and ignore any set-mappings"""
+
         normalized = self._normalize_key(key)
         self.options[normalized] = value
 
     def update(self, options: Mapping[str, Any]) -> None:
+        """Merge options"""
+
         for key, value in options.items():
             self.set(key, value)
 
@@ -88,58 +115,86 @@ class Options:
         return self.options.__iter__()
 
 
+_TChoices = TypeVar("_TChoices", bound=Iterable)
+
+
 class Argument:
-    """
-    Accepts most of the parameters accepted by :meth:`ArgumentParser.add_argument`,
-    except that ``requires`` is a special case which is only enforced if the plugin is in use.
-    In addition, the ``name`` parameter is the name relative to the plugin name, but can be overridden by ``argument_name``.
-
-    Should not be called directly, see the :func:`pluginargument <streamlink.plugin.pluginargument>` decorator.
-    """
-
+    # noinspection PyShadowingBuiltins
     def __init__(
         self,
         name: str,
+        # `ArgumentParser.add_argument()` keywords
+        action: Optional[str] = None,
+        nargs: Optional[Union[int, Literal["?", "*", "+"]]] = None,
+        const: Any = None,
+        default: Any = None,
+        type: Optional[Callable[[Any], Union[_TChoices, Any]]] = None,  # noqa: A002
+        choices: Optional[_TChoices] = None,
         required: bool = False,
-        requires: Optional[Union[str, Sequence[str]]] = None,
+        help: Optional[str] = None,  # noqa: A002
+        metavar: Optional[Union[str, List[str], Tuple[str, ...]]] = None,
+        dest: Optional[str] = None,
+        # additional `Argument()` keywords
+        requires: Optional[Union[str, List[str], Tuple[str, ...]]] = None,
         prompt: Optional[str] = None,
         sensitive: bool = False,
         argument_name: Optional[str] = None,
-        dest: Optional[str] = None,
-        is_global: bool = False,
-        **options,
     ):
         """
+        Accepts most of the parameters accepted by :meth:`argparse.ArgumentParser.add_argument()`, except that
+
+        - ``name`` is the name relative to the plugin name (can be overridden by ``argument_name``)
+          and that only one argument name is supported
+        - ``action`` must be a string and can't be a custom :class:`Action <argparse.Action>`
+        - ``required`` is a special case which is only enforced if the plugin is in use
+
+        This class should not be instantiated directly.
+        See the :func:`pluginargument <streamlink.plugin.pluginargument>` decorator for adding custom plugin arguments.
+
         :param name: Argument name, without leading ``--`` or plugin name prefixes, e.g. ``"username"``, ``"password"``, etc.
-        :param required: Whether the argument is required for the plugin
-        :param requires: List of arguments which this argument requires, eg ``["password"]``
-        :param prompt: If the argument is required and not set, this prompt message will be shown instead
-        :param sensitive: Whether the argument is sensitive (passwords, etc.) and should be masked
-        :param argument_name: Custom CLI argument name without plugin name prefix
-        :param dest: Custom plugin option name
-        :param is_global: Whether this plugin argument refers to a global CLI argument (deprecated)
-        :param options: Arguments passed to :meth:`ArgumentParser.add_argument`, excluding ``requires`` and ``dest``
+        :param action: See :meth:`ArgumentParser.add_argument()`
+        :param nargs: See :meth:`ArgumentParser.add_argument()`
+        :param const: See :meth:`ArgumentParser.add_argument()`
+        :param default: See :meth:`ArgumentParser.add_argument()`
+        :param type: See :meth:`ArgumentParser.add_argument()`
+        :param choices: See :meth:`ArgumentParser.add_argument()`
+        :param required: See :meth:`ArgumentParser.add_argument()`
+        :param help: See :meth:`ArgumentParser.add_argument()`
+        :param metavar: See :meth:`ArgumentParser.add_argument()`
+        :param dest: See :meth:`ArgumentParser.add_argument()`
+        :param requires: List of other arguments which this argument requires, e.g. ``["password"]``
+        :param prompt: If the argument is required and not set, then this prompt message will be shown instead
+        :param sensitive: Whether the argument is sensitive and should be masked (passwords, etc.)
+        :param argument_name: Custom CLI argument name without the automatically added plugin name prefix
         """
 
-        self.required = required
         self.name = name
-        self.options = options
-        self._argument_name = self._normalize_name(argument_name) if argument_name else None
+
+        self.action = action
+        self.nargs = nargs
+        self.const = const
+        self.type = type
+        self.choices: Optional[Tuple[Any, ...]] = tuple(choices) if choices else None
+        self.required = required
+        # argparse compares the object identity of argparse.SUPPRESS
+        self.help = argparse.SUPPRESS if help == argparse.SUPPRESS else help
+        self.metavar: Optional[Union[str, Tuple[str, ...]]] = (
+            tuple(metavar)
+            if metavar is not None and not isinstance(metavar, str)
+            else metavar
+        )
+
+        self._default = default
         self._dest = self._normalize_dest(dest) if dest else None
-        requires = requires or []
-        self.requires = list(requires) if isinstance(requires, (list, tuple)) else [requires]
+
+        self.requires: Tuple[str, ...] = (
+            tuple(requires)
+            if requires is not None and not isinstance(requires, str)
+            else ((requires,) if requires is not None else ())
+        )
         self.prompt = prompt
         self.sensitive = sensitive
-        self._default = options.get("default")
-        self.is_global = is_global
-        if is_global:
-            warnings.warn(
-                "Defining global plugin arguments is deprecated. Use the session options instead.",
-                StreamlinkDeprecationWarning,
-                # set stacklevel to 3 because of the @pluginargument decorator
-                # which is the public interface for defining plugin arguments
-                stacklevel=3,
-            )
+        self._argument_name = self._normalize_name(argument_name) if argument_name else None
 
     @staticmethod
     def _normalize_name(name: str) -> str:
@@ -153,7 +208,7 @@ class Argument:
         return self._argument_name or self._normalize_name(f"{plugin}-{self.name}")
 
     def argument_name(self, plugin):
-        return f"--{self.name if self.is_global else self._name(plugin)}"
+        return f"--{self._name(plugin)}"
 
     def namespace_dest(self, plugin):
         return self._normalize_dest(self._name(plugin))
@@ -165,6 +220,50 @@ class Argument:
     @property
     def default(self):  # read-only
         return self._default
+
+    # `ArgumentParser.add_argument()` keywords, except `name_or_flags` and `required`
+    _ARGPARSE_ARGUMENT_KEYWORDS: ClassVar[Mapping[str, str]] = {
+        "action": "action",
+        "nargs": "nargs",
+        "const": "const",
+        "default": "default",
+        "type": "type",
+        "choices": "choices",
+        "help": "help",
+        "metavar": "metavar",
+        "dest": "_dest",
+    }
+
+    @property
+    def options(self) -> Mapping[str, Any]:
+        return {
+            name: getattr(self, attr)
+            for name, attr in self._ARGPARSE_ARGUMENT_KEYWORDS.items()
+            # don't pass keywords with ``None`` values to ``ArgumentParser.add_argument()``
+            if getattr(self, attr) is not None
+        }
+
+    def __hash__(self):
+        return hash((
+            self.name,
+            self.action,
+            self.nargs,
+            self.const,
+            self.type,
+            self.choices,
+            self.required,
+            self.help,
+            self.metavar,
+            self._default,
+            self._dest,
+            self.requires,
+            self.prompt,
+            self.sensitive,
+            self._argument_name,
+        ))
+
+    def __eq__(self, other):
+        return isinstance(other, self.__class__) and hash(self) == hash(other)
 
 
 class Arguments:
@@ -180,8 +279,13 @@ class Arguments:
 
     def __iter__(self) -> Iterator[Argument]:
         # iterate in reverse order due to add() being called by multiple pluginargument decorators in reverse order
-        # TODO: Python 3.7 removal: remove list()
-        return reversed(list(self.arguments.values()))
+        return reversed(self.arguments.values())
+
+    def __hash__(self):
+        return hash(tuple(self.arguments.items()))
+
+    def __eq__(self, other):
+        return isinstance(other, self.__class__) and hash(self) == hash(other)
 
     def add(self, argument: Argument) -> None:
         self.arguments[argument.name] = argument
@@ -213,4 +317,8 @@ class Arguments:
                 yield r
 
 
-__all__ = ["Options", "Arguments", "Argument"]
+__all__ = [
+    "Argument",
+    "Arguments",
+    "Options",
+]

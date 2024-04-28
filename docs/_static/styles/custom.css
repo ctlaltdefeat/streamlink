@@ -109,6 +109,10 @@ a[href^="https://"]:not(.no-external-link-icon):not(.muted-link):not(.sd-badge):
   Sidebar/Menubar and related
 */
 
+.sidebar-scroll, .toc-scroll {
+  overflow: hidden auto;
+}
+
 .toc-scroll:not(:hover) {
   scrollbar-color: transparent !important;
 }
@@ -244,7 +248,7 @@ table.table-custom-layout th {
   text-align: left;
 }
 table.table-custom-layout th:first-of-type {
-  width: 14rem;
+  width: 15rem;
 }
 table.table-custom-layout tbody tr td {
   overflow: unset;

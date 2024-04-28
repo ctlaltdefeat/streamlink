@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import sys
 from os import path
 from sys import argv, exit, version_info
 from textwrap import dedent
@@ -9,7 +10,7 @@ def format_msg(text, *args, **kwargs):
 
 
 CURRENT_PYTHON = version_info[:2]
-REQUIRED_PYTHON = (3, 7)
+REQUIRED_PYTHON = (3, 8)
 
 # This check and everything above must remain compatible with older Python versions
 if CURRENT_PYTHON < REQUIRED_PYTHON:
@@ -73,11 +74,21 @@ data_files = [
 
 
 if __name__ == "__main__":
-    from setuptools import setup  # type: ignore[import]
-    from versioningit import get_cmdclasses
+    sys.path.insert(0, path.dirname(__file__))
+
+    from build_backend.commands import cmdclass
+    from setuptools import setup
+
+    try:
+        # versioningit is only required when building from git (see pyproject.toml)
+        from versioningit import get_cmdclasses
+    except ImportError:  # pragma: no cover
+        def get_cmdclasses(_):  # type: ignore[misc]
+            return _
 
     setup(
-        cmdclass=get_cmdclasses(),
+        cmdclass=get_cmdclasses(cmdclass),
         entry_points=entry_points,
         data_files=data_files,
+        # version="",  # static version string template, uncommented and substituted by versioningit's onbuild hook
     )

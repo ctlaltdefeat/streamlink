@@ -61,7 +61,7 @@ class Tag(HLSItemBase):
 
     def build(self, *args, **kwargs):
         attrs = None
-        if type(self.attrs) == dict:
+        if isinstance(self.attrs, dict):
             attrs = ",".join([
                 "{0}={1}".format(key, value(self, *args, **kwargs) if callable(value) else value)
                 for (key, value) in self.attrs.items()
@@ -114,11 +114,11 @@ class EventedHLSStreamWriter(_HLSStreamWriter):
         super().__init__(*args, **kwargs)
         self.handshake = Handshake()
 
-    def _futures_put(self, item):
-        self.futures.put_nowait(item)
+    def _queue_put(self, item):
+        self._queue.put_nowait(item)
 
-    def _futures_get(self):
-        return self.futures.get_nowait()
+    def _queue_get(self):
+        return self._queue.get_nowait()
 
     @staticmethod
     def _future_result(future):
@@ -201,7 +201,7 @@ class TestMixinStreamHLS(unittest.TestCase):
         super().__init__(*args, **kwargs)
         # FIXME: fix HTTPSession.request()
         # don't sleep on mocked HTTP request failures
-        self._patch_http_retry_sleep = patch("streamlink.plugin.api.http_session.time.sleep")
+        self._patch_http_retry_sleep = patch("streamlink.session.http.time.sleep")
         self.mocker = requests_mock.Mocker()
         self.mocks = {}
 
@@ -231,7 +231,7 @@ class TestMixinStreamHLS(unittest.TestCase):
 
     def called(self, item, once=False):
         mock = self.get_mock(item)
-        return mock.called_once if once else mock.called
+        return mock.call_count == 1 if once else mock.called
 
     def url(self, item):
         return item.url(self.id())
@@ -280,7 +280,7 @@ class TestMixinStreamHLS(unittest.TestCase):
         return data
 
     def get_session(self, options=None, *args, **kwargs):
-        return Streamlink(options)
+        return Streamlink(options, plugins_builtin=False)
 
     # set up HLS responses, create the session and read thread and start it
     def subject(self, playlists, options=None, streamoptions=None, threadoptions=None, start=True, *args, **kwargs):
@@ -299,7 +299,7 @@ class TestMixinStreamHLS(unittest.TestCase):
         if start:
             self.start()
 
-        return self.thread, segments
+        return segments
 
     def start(self):
         self.thread.reader.open()

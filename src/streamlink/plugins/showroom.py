@@ -2,10 +2,12 @@
 $description Japanese live-streaming service used primarily by Japanese idols & voice actors and their fans.
 $url showroom-live.com
 $type live
+$metadata title
 """
 
 import logging
 import re
+from urllib.parse import parse_qsl, urlparse
 
 from streamlink.plugin import Plugin, pluginmatcher
 from streamlink.plugin.api import validate
@@ -30,15 +32,17 @@ class Showroom(Plugin):
             self.url,
             schema=validate.Schema(
                 validate.parse_html(),
-                validate.xml_xpath_string(".//script[contains(text(),'share_url:\"https:')][1]/text()"),
+                validate.xml_xpath_string(".//nav//a[contains(@href,'/room/profile?')]/@href"),
                 validate.none_or_all(
-                    re.compile(r"share_url:\"https:[^?]+?\?room_id=(?P<room_id>\d+)\""),
-                    validate.any(None, validate.get("room_id")),
+                    validate.transform(lambda _url_profile: dict(parse_qsl(urlparse(_url_profile).query))),
+                    validate.get("room_id"),
                 ),
             ),
         )
         if not room_id:
             return
+
+        log.debug(f"Room ID: {room_id}")
 
         live_status, self.title = self.session.http.get(
             "https://www.showroom-live.com/api/live/live_info",
@@ -80,7 +84,7 @@ class Showroom(Plugin):
         )
 
         res = self.session.http.get(url, acceptable_status=(200, 403, 404))
-        if res.headers["Content-Type"] != "application/x-mpegURL":
+        if res.headers["Content-Type"] not in ("application/x-mpegURL", "application/vnd.apple.mpegurl"):
             log.error("This stream is restricted")
             return
 

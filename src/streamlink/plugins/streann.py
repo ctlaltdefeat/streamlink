@@ -1,11 +1,12 @@
 """
-$description Global live streaming and video on-demand hosting platform.
+$description Global live-streaming and video on-demand hosting platform.
 $url ott.streann.com
 $url centroecuador.ec
 $url columnaestilos.com
 $url evtv.online/noticias-de-venezuela
 $url telecuracao.com
 $type live, vod
+$metadata title
 """
 
 import base64
@@ -44,7 +45,6 @@ log = logging.getLogger(__name__)
 @pluginargument(
     "url",
     metavar="URL",
-    type=str,
     help="Source URL where the iframe is located, only required for direct URLs of ott.streann.com",
 )
 class Streann(Plugin):
