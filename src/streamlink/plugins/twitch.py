@@ -208,7 +208,7 @@ class TwitchHLSStream(HLSStream):
 
 
 class UsherService:
-    def __init__(self, session, ttvlol_adblock=False, ttvlol_proxy=''):
+    def __init__(self, session, ttvlol_adblock=False, ttvlol_proxy=""):
         self.session = session
         self.ttvlol_adblock = ttvlol_adblock
         self.ttvlol_proxy = ttvlol_proxy
@@ -252,8 +252,7 @@ class UsherService:
             pass
         if not is_adfree:
             if self.ttvlol_adblock:
-                proxy = self.ttvlol_proxy
-                url = f"https://{proxy}/playlist/{channel}.m3u8%3Fallow_source%3Dtrue%26fast_bread%3Dtrue"
+                url = f"https://{self.ttvlol_proxy}/playlist/{channel}.m3u8%3Fallow_source%3Dtrue%26fast_bread%3Dtrue"
                 self.session.http.headers.update({"x-donate-to": "https://ttv.lol/donate"})
                 params = {}
         return self._create_url(url, **params)
@@ -766,11 +765,11 @@ class Twitch(Plugin):
             session=self.session,
             api_header=self.get_option("api-header"),
             access_token_param=self.get_option("access-token-param"),
-            chrome_oauth=self.get_option("chrome-oauth")
+            chrome_oauth=self.get_option("chrome-oauth"),
         )
-        self.usher = UsherService(session=self.session, 
-                                  ttvlol_adblock=self.session.get_option("ttvlol-adblock"), 
-                                  ttvlol_proxy=self.session.get_option("ttvlol-proxy"))
+        self.usher = UsherService(session=self.session,
+                                  ttvlol_adblock=self.get_option("ttvlol-adblock"),
+                                  ttvlol_proxy=self.get_option("ttvlol-proxy"))
 
         def method_factory(parent_method):
             def inner():
