@@ -208,8 +208,10 @@ class TwitchHLSStream(HLSStream):
 
 
 class UsherService:
-    def __init__(self, session):
+    def __init__(self, session, ttvlol_adblock=False, ttvlol_proxy=''):
         self.session = session
+        self.ttvlol_adblock = ttvlol_adblock
+        self.ttvlol_proxy = ttvlol_proxy
         self.default_params = {
             "player": "twitchweb",
             "p": int(random() * 999999),
@@ -249,8 +251,8 @@ class UsherService:
         except KeyError:
             pass
         if not is_adfree:
-            if self.session.get_option("ttvlol-adblock"):
-                proxy = self.session.get_option("ttvlol-proxy")
+            if self.ttvlol_adblock:
+                proxy = self.ttvlol_proxy
                 url = f"https://{proxy}/playlist/{channel}.m3u8%3Fallow_source%3Dtrue%26fast_bread%3Dtrue"
                 self.session.http.headers.update({"x-donate-to": "https://ttv.lol/donate"})
                 params = {}
@@ -263,16 +265,15 @@ class UsherService:
 class TwitchAPI:
     CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"
 
-    def __init__(self, session, api_header=None, access_token_param=None):
+    def __init__(self, session, api_header=None, access_token_param=None, chrome_oauth=False):
         self.session = session
         self.headers = {
             "Client-ID": self.CLIENT_ID,
         }
-        if session.get_option("twitch-chrome-oauth") and browser_cookie:
+        if chrome_oauth and browser_cookie:
             if oauth_token := next(
                 (co.value for co in browser_cookie.chrome(domain_name=".twitch.tv") if co.name == "auth-token"), None
             ):
-                log.info(f"OAuth Token: {oauth_token}")
                 self.headers.update({"Authorization": f"OAuth {oauth_token}"})
         self.headers.update(**dict(api_header or []))
         self.access_token_params = dict(access_token_param or [])
@@ -765,8 +766,11 @@ class Twitch(Plugin):
             session=self.session,
             api_header=self.get_option("api-header"),
             access_token_param=self.get_option("access-token-param"),
+            chrome_oauth=self.get_option("chrome-oauth")
         )
-        self.usher = UsherService(session=self.session)
+        self.usher = UsherService(session=self.session, 
+                                  ttvlol_adblock=self.session.get_option("ttvlol-adblock"), 
+                                  ttvlol_proxy=self.session.get_option("ttvlol-proxy"))
 
         def method_factory(parent_method):
             def inner():
